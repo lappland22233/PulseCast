@@ -1,0 +1,46 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 精致深色工具风设计令牌 -->
+    <Color x:Key="AppBackgroundColor">#0B0D10</Color>
+    <Color x:Key="SurfaceColor">#12151B</Color>
+    <Color x:Key="SurfaceAltColor">#1A1F28</Color>
+    <Color x:Key="SurfaceHoverColor">#232A37</Color>
+    <!-- 卡片Hairline描边 -->
+    <Color x:Key="BorderColor">#1FFFFFFF</Color>
+    <!-- 控件边框：实色、在深色背景上清晰可见 -->
+    <Color x:Key="ControlBorderColor">#333C4D</Color>
+    <Color x:Key="ControlHoverBorderColor">#516080</Color>
+    <Color x:Key="PrimaryColor">#FF4D6D</Color>
+    <Color x:Key="PrimarySoftColor">#33FF4D6D</Color>
+    <Color x:Key="LiveColor">#22C55E</Color>
+    <Color x:Key="InfoColor">#38BDF8</Color>
+    <Color x:Key="WarnColor">#F59E0B</Color>
+    <Color x:Key="ErrorColor">#FF4D6D</Color>
+    <Color x:Key="TextColor">#F4F7FB</Color>
+    <Color x:Key="MutedColor">#B8C2D1</Color>
+    <Color x:Key="FaintColor">#8B99AE</Color>
+    <Color x:Key="PopupColor">#161B23</Color>
+    <Color x:Key="TrackColor">#2A3140</Color>
+    <Color x:Key="ThumbColor">#E8EDF4</Color>
+    <Color x:Key="ScrollThumbColor">#3A4352</Color>
+
+    <SolidColorBrush x:Key="AppBackground" Color="{StaticResource AppBackgroundColor}"/>
+    <SolidColorBrush x:Key="Surface" Color="{StaticResource SurfaceColor}"/>
+    <SolidColorBrush x:Key="SurfaceAlt" Color="{StaticResource SurfaceAltColor}"/>
+    <SolidColorBrush x:Key="SurfaceHover" Color="{StaticResource SurfaceHoverColor}"/>
+    <SolidColorBrush x:Key="Border" Color="{StaticResource BorderColor}"/>
+    <SolidColorBrush x:Key="ControlBorder" Color="{StaticResource ControlBorderColor}"/>
+    <SolidColorBrush x:Key="ControlHoverBorder" Color="{StaticResource ControlHoverBorderColor}"/>
+    <SolidColorBrush x:Key="Primary" Color="{StaticResource PrimaryColor}"/>
+    <SolidColorBrush x:Key="PrimarySoft" Color="{StaticResource PrimarySoftColor}"/>
+    <SolidColorBrush x:Key="Live" Color="{StaticResource LiveColor}"/>
+    <SolidColorBrush x:Key="Info" Color="{StaticResource InfoColor}"/>
+    <SolidColorBrush x:Key="Warn" Color="{StaticResource WarnColor}"/>
+    <SolidColorBrush x:Key="Error" Color="{StaticResource ErrorColor}"/>
+    <SolidColorBrush x:Key="TextPrimary" Color="{StaticResource TextColor}"/>
+    <SolidColorBrush x:Key="TextMuted" Color="{StaticResource MutedColor}"/>
+    <SolidColorBrush x:Key="TextFaint" Color="{StaticResource FaintColor}"/>
+    <SolidColorBrush x:Key="Popup" Color="{StaticResource PopupColor}"/>
+    <SolidColorBrush x:Key="Track" Color="{StaticResource TrackColor}"/>
+    <SolidColorBrush x:Key="Thumb" Color="{StaticResource ThumbColor}"/>
+    <SolidColorBrush x:Key="ScrollThumb" Color="{StaticResource ScrollThumbColor}"/>
+</ResourceDictionary>

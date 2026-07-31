@@ -1,0 +1,250 @@
+<Window x:Class="HeartRateBroadcast.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+        Title="PulseCast" Width="1080" Height="760" MinWidth="680" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None" ResizeMode="CanResize"
+        Style="{StaticResource AppWindow}">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
+
+    <!-- 根 Border：常规态绘制 1px 发丝边框；最大化时内缩 6px 防止内容贴屏幕边缘被裁剪 -->
+    <Border>
+        <Border.Style>
+            <Style TargetType="Border">
+                <Setter Property="BorderBrush" Value="{StaticResource ControlBorder}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized">
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Margin" Value="6"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 自绘标题栏：整行由 WindowChrome CaptionHeight 提供拖拽，按钮已设 IsHitTestVisibleInChrome -->
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,8,0">
+                    <Path Data="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"
+                          Fill="{StaticResource Primary}" Stretch="Uniform" Width="14" Height="14" VerticalAlignment="Center"/>
+                    <TextBlock Text="PulseCast" FontWeight="SemiBold" FontSize="13" VerticalAlignment="Center" Margin="9,0,0,0"/>
+                    <TextBlock Text="心率广播控制台" Foreground="{StaticResource TextFaint}" FontSize="12" VerticalAlignment="Center" Margin="10,1,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Style="{StaticResource CaptionButton}" Command="{x:Static SystemCommands.MinimizeWindowCommand}"
+                            ToolTip="最小化" AutomationProperties.Name="最小化窗口">
+                        <TextBlock Style="{StaticResource CaptionGlyph}" Text="&#xE921;"/>
+                    </Button>
+                    <Button Style="{StaticResource CaptionButton}" Command="{x:Static SystemCommands.MaximizeWindowCommand}"
+                            ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原窗口">
+                        <TextBlock Style="{StaticResource MaximizeGlyph}"/>
+                    </Button>
+                    <Button Style="{StaticResource CloseCaptionButton}" Command="{x:Static SystemCommands.CloseWindowCommand}"
+                            ToolTip="关闭" AutomationProperties.Name="关闭窗口">
+                        <TextBlock Style="{StaticResource CaptionGlyph}" Text="&#xE8BB;"/>
+                    </Button>
+                </StackPanel>
+                <Border Height="1" Background="{StaticResource Border}" VerticalAlignment="Bottom"/>
+            </Grid>
+
+            <!-- 内容区 -->
+            <Grid Grid.Row="1" Margin="28">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- 头部 -->
+                <StackPanel>
+                    <Grid Margin="0,0,0,18">
+                        <StackPanel>
+                            <TextBlock Text="心率广播控制台" FontSize="28" FontWeight="Bold"/>
+                            <TextBlock Text="实时接收 BLE 心率数据，并稳定显示在窗口化全屏内容之上" Foreground="{StaticResource TextMuted}" Margin="0,6,0,0"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button Content="显示悬浮窗" Command="{Binding ShowOverlayCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,0"/>
+                            <Button Content="{Binding ScanButtonText}" Command="{Binding ToggleScanCommand}"
+                                    AutomationProperties.HelpText="开始或停止搜索附近的蓝牙心率设备"/>
+                        </StackPanel>
+                    </Grid>
+                    <Border Height="1" Background="{StaticResource Border}" Margin="0,0,0,20"/>
+                </StackPanel>
+
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.25*"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 设备列表 -->
+                    <Border Style="{StaticResource Card}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="附近设备" FontSize="16" FontWeight="SemiBold"/>
+                                <TextBlock Text="选择设备后点击连接；仅广播心率的设备无需 GATT 连接" Foreground="{StaticResource TextMuted}" Margin="0,4,0,16"/>
+                            </StackPanel>
+                            <Grid Grid.Row="1">
+                            <ListBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                                     Background="Transparent" BorderThickness="0" Foreground="{StaticResource TextPrimary}"
+                                     AutomationProperties.Name="附近的蓝牙心率设备"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource SurfaceAlt}" CornerRadius="12" Padding="14" Margin="0,0,0,10">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding Name}"/>
+                                                    <TextBlock Text="{Binding AddressText}" FontFamily="Cascadia Mono" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="0,4,0,0"/>
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Rssi, StringFormat={}{0} dBm}" HorizontalAlignment="Right"/>
+                                                    <TextBlock Text="BLE" Foreground="{StaticResource Live}" HorizontalAlignment="Right" FontSize="11" Margin="0,3,0,0"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                                <Border Background="{StaticResource SurfaceAlt}" CornerRadius="12" Padding="20"
+                                        Visibility="{Binding HasNoDevices, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="{Binding EmptyStateText}" TextWrapping="Wrap" TextAlignment="Center"
+                                               Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/>
+                                </Border>
+                            </Grid>
+                            <Grid Grid.Row="2" Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button Content="{Binding ConnectButtonText}" Command="{Binding ConnectSelectedDeviceCommand}"/>
+                                <Button Grid.Column="1" Content="取消连接" Command="{Binding CancelConnectCommand}" Margin="8,0,0,0"/>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <!-- 右列 -->
+                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
+                            <!-- 实时心率 -->
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,20">
+                                <StackPanel>
+                                    <TextBlock Text="实时心率" FontSize="16" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,24,0,8">
+                                        <TextBlock Text="{Binding CurrentBpm}" FontFamily="Cascadia Mono" FontSize="64" FontWeight="Bold"/>
+                                        <TextBlock Text="BPM" Foreground="{StaticResource TextMuted}" VerticalAlignment="Bottom" Margin="10,0,0,13"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{Binding StatusBrush}"
+                                               AutomationProperties.LiveSetting="Polite" AutomationProperties.Name="当前心率状态"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 悬浮窗控制 -->
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,20">
+                                <StackPanel>
+                                    <TextBlock Text="悬浮窗控制" FontSize="16" FontWeight="SemiBold"/>
+
+                                    <UniformGrid Columns="2" Margin="0,14,0,0">
+                                        <Button Content="{Binding OverlayLockButtonText}" Command="{Binding ToggleOverlayLockCommand}" Margin="0,0,6,6"/>
+                                        <Button Content="{Binding OverlayBackgroundButtonText}" Command="{Binding ToggleOverlayBackgroundCommand}" Margin="6,0,0,6"/>
+                                        <Button Content="切换点击穿透" Command="{Binding ToggleOverlayClickThroughCommand}" Margin="0,6,6,0"
+                                                ToolTip="启用后鼠标事件会穿过悬浮窗；可始终从本窗口关闭"/>
+                                    </UniformGrid>
+
+                                    <TextBlock Text="智能反色" FontWeight="SemiBold" Margin="0,20,0,6"/>
+                                    <ComboBox SelectedValue="{Binding Overlay.InversionMode, Mode=TwoWay}">
+                                        <sys:String>自动</sys:String>
+                                        <sys:String>强制浅字</sys:String>
+                                        <sys:String>强制深字</sys:String>
+                                    </ComboBox>
+                                    <TextBlock Text="透明背景下按屏幕亮度自动切换字体深浅" Foreground="{StaticResource TextFaint}" FontSize="11" Margin="0,5,0,0"/>
+
+                                    <TextBlock Text="数字字体" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                                    <ComboBox SelectedValue="{Binding Overlay.NumberFont, Mode=TwoWay}">
+                                        <sys:String>等宽</sys:String>
+                                        <sys:String>仪表</sys:String>
+                                        <sys:String>无衬线</sys:String>
+                                    </ComboBox>
+
+                                    <TextBlock Text="字体颜色" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                                    <ComboBox SelectedValue="{Binding Overlay.ColorMode, Mode=TwoWay}">
+                                        <sys:String>自动</sys:String>
+                                        <sys:String>逐字渐变</sys:String>
+                                        <sys:String>单色</sys:String>
+                                    </ComboBox>
+
+                                    <TextBlock Text="渐变预设" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                                    <ComboBox SelectedValue="{Binding Overlay.GradientId, Mode=TwoWay}">
+                                        <sys:String>红粉</sys:String>
+                                        <sys:String>冰蓝</sys:String>
+                                        <sys:String>翠绿</sys:String>
+                                        <sys:String>金橙</sys:String>
+                                    </ComboBox>
+
+                                    <TextBlock Text="单色" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                                    <ComboBox SelectedValue="{Binding Overlay.SolidColor, Mode=TwoWay}">
+                                        <sys:String>纯白</sys:String>
+                                        <sys:String>深黑</sys:String>
+                                        <sys:String>心率红</sys:String>
+                                        <sys:String>荧光绿</sys:String>
+                                        <sys:String>天蓝</sys:String>
+                                        <sys:String>琥珀</sys:String>
+                                        <sys:String>橙</sys:String>
+                                        <sys:String>玫红</sys:String>
+                                    </ComboBox>
+
+                                    <TextBlock Text="显示元素" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <CheckBox Content="爱心图标" IsChecked="{Binding Overlay.ShowHeart, Mode=TwoWay}" Margin="0,0,16,0"/>
+                                        <CheckBox Content="BPM 单位" IsChecked="{Binding Overlay.ShowUnit, Mode=TwoWay}" Margin="0,0,16,0"/>
+                                        <CheckBox Content="实时状态" IsChecked="{Binding Overlay.ShowLive, Mode=TwoWay}"/>
+                                    </StackPanel>
+
+                                    <TextBlock FontWeight="SemiBold" Margin="0,16,0,6">
+                                        <Run Text="整体大小"/><Run Text="  "/><Run Text="{Binding Overlay.Scale, StringFormat={}{0:F2}×}" Foreground="{StaticResource TextMuted}"/>
+                                    </TextBlock>
+                                    <Slider Minimum="0.75" Maximum="1.5" Value="{Binding Overlay.Scale, Mode=TwoWay}" TickFrequency="0.05" IsSnapToTickEnabled="True"/>
+
+                                    <TextBlock FontWeight="SemiBold" Margin="0,16,0,6">
+                                        <Run Text="不透明度"/><Run Text="  "/><Run Text="{Binding Overlay.OverlayOpacity, StringFormat={}{0:P0}}" Foreground="{StaticResource TextMuted}"/>
+                                    </TextBlock>
+                                    <Slider Minimum="0.5" Maximum="1" Value="{Binding Overlay.OverlayOpacity, Mode=TwoWay}" TickFrequency="0.05" IsSnapToTickEnabled="True"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 兼容边界 -->
+                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="16" Padding="16">
+                                <TextBlock Text="支持普通窗口、无边框全屏和窗口化全屏；不覆盖真正独占全屏及安全桌面。" TextWrapping="Wrap" Foreground="{StaticResource Warn}" FontSize="12"/>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

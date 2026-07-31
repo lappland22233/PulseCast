@@ -1,0 +1,49 @@
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+.codebuddy
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET build outputs
+[Bb]in/
+[Oo]bj/
+artifacts/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+
+# Local publish and release outputs
+Release/
+publish/
+*.nupkg
+*.snupkg
+
+# Local application data and diagnostics
+*.log
+*.tmp
+*.bak
+settings.json
+settings.json.*
+
+# Local CodeBuddy and agent data
+.codebuddy/
+.learnings/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Signing and secrets
+*.pfx
+*.p12
+*.cer
+*.key
+*.secrets.json
