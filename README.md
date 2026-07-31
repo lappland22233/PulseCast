@@ -23,7 +23,7 @@ PulseCast 是面向 Windows 11 x64 的 WPF 桌面应用，用于发现 BLE 心�
 ## 快速开始
 
 ```powershell
-git clone <your-repository-url>
+git clone https://github.com/lappland22233/PulseCast
 cd HeartRateBroadcast
 dotnet restore
 dotnet build HeartRateBroadcast.sln -c Release
