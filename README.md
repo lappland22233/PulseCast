@@ -95,3 +95,4 @@ dotnet test HeartRateBroadcast.sln -c Release
 
 ## 许可证
 
+GPL-3.0 license
