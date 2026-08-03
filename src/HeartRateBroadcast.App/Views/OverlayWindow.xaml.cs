@@ -3,8 +3,6 @@ using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Interop;
-using HeartRateBroadcast.App.Interop;
 using HeartRateBroadcast.App.Services.Overlay;
 using HeartRateBroadcast.App.ViewModels;
 
@@ -22,23 +20,29 @@ public partial class OverlayWindow : Window
 
     private readonly OverlayViewModel _vm;
     private readonly IScreenLuminanceSampler _sampler;
-    private readonly InversionDecider _decider = new();
+    private readonly CharacterContrastService _characterContrast;
+    private readonly List<Run> _characterRuns = [];
+    private bool[] _characterLightText = [];
     private System.Windows.Threading.DispatcherTimer? _inversionTimer;
     private Storyboard? _beat;
     private bool? _appliedLightText;
     private CancellationTokenSource? _sampleCts;
     private bool _sampleInProgress;
+    private int _stableSampleCount;
     private bool _disposed;
 
     public bool IsPositionLocked { get; set; }
 
-    public OverlayWindow(OverlayViewModel viewModel, IScreenLuminanceSampler sampler)
+    public OverlayWindow(OverlayViewModel viewModel, IScreenLuminanceSampler sampler, CharacterContrastService characterContrast)
     {
         InitializeComponent();
         DataContext = _vm = viewModel;
         _sampler = sampler;
+        _characterContrast = characterContrast;
         Loaded += OnLoaded;
         Closed += OnClosed;
+        LocationChanged += OnGeometryChanged;
+        SizeChanged += OnGeometryChanged;
         _vm.PropertyChanged += OnVmPropertyChanged;
     }
 
@@ -49,18 +53,34 @@ public partial class OverlayWindow : Window
         UpdateHeartBeat();
         if (_inversionTimer is null)
         {
-            _inversionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
+            _inversionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(125) };
             _inversionTimer.Tick += OnInversionTick;
         }
         _inversionTimer.Start();
+        ScheduleImmediateSample();
     }
+
+    private void OnGeometryChanged(object? sender, EventArgs e) => ScheduleImmediateSample();
+
+    private void ScheduleImmediateSample()
+    {
+        _stableSampleCount = 0;
+        if (_inversionTimer is not null) _inversionTimer.Interval = TimeSpan.FromMilliseconds(125);
+        if (!IsLoaded || !ShouldUsePerCharacterInversion()) return;
+        Dispatcher.BeginInvoke(async () => await SampleAndApplyAsync(), System.Windows.Threading.DispatcherPriority.Render);
+    }
+
+    private bool ShouldUsePerCharacterInversion() =>
+        _vm.HideBackground && _vm.InversionMode == "自动" && _vm.ColorMode == "自动";
 
     private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
         {
             case nameof(OverlayViewModel.Bpm):
+                _characterContrast.Reset();
                 RebuildBpmText();
+                ScheduleImmediateSample();
                 UpdateHeartBeat();
                 break;
             case nameof(OverlayViewModel.IsLightText):
@@ -68,31 +88,55 @@ public partial class OverlayWindow : Window
             case nameof(OverlayViewModel.SolidColor):
             case nameof(OverlayViewModel.GradientId):
             case nameof(OverlayViewModel.InversionMode):
+                _characterContrast.Reset();
                 ApplyTheme(force: true);
+                ScheduleImmediateSample();
+                break;
+            case nameof(OverlayViewModel.NumberFontFamily):
+            case nameof(OverlayViewModel.NumberFontSize):
+                ScheduleImmediateSample();
                 break;
             case nameof(OverlayViewModel.HideBackground):
+                _characterContrast.Reset();
                 ApplyBackgroundMode();
-                ApplyTheme();
+                ApplyTheme(force: true);
+                ScheduleImmediateSample();
                 break;
         }
     }
 
     private async void OnInversionTick(object? sender, EventArgs e) => await SampleAndApplyAsync();
 
-    /// <summary>在后台单航班采样悬浮窗外侧背景亮度，不改变窗口可见性。</summary>
+    /// <summary>在后台单航班采样字符实际屏幕区域，并按字符增量更新前景色。</summary>
     private async Task SampleAndApplyAsync()
     {
-        if (_disposed || _sampleInProgress || !IsVisible || _vm.InversionMode != "自动" || !_vm.HideBackground) return;
+        if (_disposed || _sampleInProgress || !IsVisible || !ShouldUsePerCharacterInversion()) return;
+        IReadOnlyList<Int32Rect> regions = GetCharacterScreenRegions();
+        Int32Rect union = CharacterContrastService.Union(regions);
+        if (union.IsEmpty) return;
+
         _sampleInProgress = true;
         _sampleCts?.Cancel();
         _sampleCts?.Dispose();
         _sampleCts = new CancellationTokenSource();
         try
         {
-            double? luminance = await _sampler.SampleAsync(GetAdjacentScreenRegion(), _sampleCts.Token);
-            if (!luminance.HasValue || _disposed) return;
-            bool useLightText = _decider.ShouldUseLightText(luminance.Value);
-            if (_vm.IsLightText != useLightText) _vm.IsLightText = useLightText;
+            ScreenPixelBuffer? pixels = await _sampler.CaptureAsync(union, _sampleCts.Token);
+            if (pixels is null || _disposed) return;
+            IReadOnlyList<bool> decisions = _characterContrast.Analyze(pixels, regions, EffectiveLightText());
+            bool changed = decisions.Count != _characterLightText.Length || !decisions.SequenceEqual(_characterLightText);
+            if (changed)
+            {
+                _characterLightText = decisions.ToArray();
+                ApplyCharacterColors();
+                _stableSampleCount = 0;
+            }
+            else
+            {
+                _stableSampleCount++;
+            }
+            if (_inversionTimer is not null)
+                _inversionTimer.Interval = TimeSpan.FromMilliseconds(_stableSampleCount >= 16 ? 500 : 125);
         }
         catch (OperationCanceledException) { }
         finally
@@ -101,29 +145,35 @@ public partial class OverlayWindow : Window
         }
     }
 
-    private Int32Rect GetAdjacentScreenRegion()
+    private List<Int32Rect> GetCharacterScreenRegions()
     {
-        nint hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd == 0 || !NativeMethods.GetWindowRect(hwnd, out var windowRect)) return Int32Rect.Empty;
-        nint monitor = NativeMethods.MonitorFromWindow(hwnd, NativeMethods.MonitorDefaultToNearest);
-        var info = new NativeMethods.MonitorInfoEx
+        var result = new List<Int32Rect>(_characterRuns.Count);
+        foreach (Run run in _characterRuns)
         {
-            Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfoEx>(),
-            Device = string.Empty,
-        };
-        if (monitor == 0 || !NativeMethods.GetMonitorInfo(monitor, ref info)) return Int32Rect.Empty;
+            Rect start = run.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+            Rect end = run.ContentEnd.GetCharacterRect(LogicalDirection.Backward);
+            Point topLeft = BpmText.PointToScreen(new Point(Math.Min(start.Left, end.Left), Math.Min(start.Top, end.Top)));
+            Point bottomRight = BpmText.PointToScreen(new Point(Math.Max(start.Right, end.Right), Math.Max(start.Bottom, end.Bottom)));
+            int left = (int)Math.Floor(Math.Min(topLeft.X, bottomRight.X));
+            int top = (int)Math.Floor(Math.Min(topLeft.Y, bottomRight.Y));
+            int right = (int)Math.Ceiling(Math.Max(topLeft.X, bottomRight.X));
+            int bottom = (int)Math.Ceiling(Math.Max(topLeft.Y, bottomRight.Y));
+            result.Add(right > left && bottom > top ? new Int32Rect(left, top, right - left, bottom - top) : Int32Rect.Empty);
+        }
+        return result;
+    }
 
-        int windowWidth = Math.Max(1, windowRect.Right - windowRect.Left);
-        int windowHeight = Math.Max(1, windowRect.Bottom - windowRect.Top);
-        int sampleWidth = Math.Min(Math.Clamp(windowWidth, 48, 160), info.Monitor.Right - info.Monitor.Left);
-        int sampleHeight = Math.Min(Math.Clamp(windowHeight, 32, 80), info.Monitor.Bottom - info.Monitor.Top);
-        int centerX = windowRect.Left + windowWidth / 2;
-        int aboveY = windowRect.Top - 8 - sampleHeight;
-        int belowY = windowRect.Bottom + 8;
-        int y = aboveY >= info.Monitor.Top ? aboveY : Math.Min(belowY, info.Monitor.Bottom - sampleHeight);
-        int x = Math.Clamp(centerX - sampleWidth / 2, info.Monitor.Left, info.Monitor.Right - sampleWidth);
-        y = Math.Clamp(y, info.Monitor.Top, info.Monitor.Bottom - sampleHeight);
-        return new Int32Rect(x, y, sampleWidth, sampleHeight);
+    private void ApplyCharacterColors()
+    {
+        for (int i = 0; i < _characterRuns.Count; i++)
+        {
+            bool light = i < _characterLightText.Length ? _characterLightText[i] : EffectiveLightText();
+            Color color = light ? LightFg : DarkFg;
+            if (_characterRuns[i].Foreground is SolidColorBrush brush && brush.Color == color) continue;
+            var replacement = new SolidColorBrush(color);
+            replacement.Freeze();
+            _characterRuns[i].Foreground = replacement;
+        }
     }
 
     /// <summary>根据反色判定与颜色模式设置前景色。</summary>
@@ -154,27 +204,41 @@ public partial class OverlayWindow : Window
         return lightText;
     }
 
-    /// <summary>按颜色模式重建 BPM 文本：自动/单色为整体前景，渐变逐字上色。</summary>
+    /// <summary>按颜色模式重建 BPM 文本；自动逐字模式保留字符与实际布局的一一映射。</summary>
     private void RebuildBpmText()
     {
         string text = _vm.Bpm;
-        if (BpmText.Inlines.Count == 1 && BpmText.Inlines.FirstInline is Run existing && existing.Text == text &&
-            _vm.ColorMode != "逐字渐变")
+        bool perCharacter = ShouldUsePerCharacterInversion() || _vm.ColorMode == "逐字渐变";
+        if (!perCharacter && BpmText.Inlines.Count == 1 && BpmText.Inlines.FirstInline is Run existing && existing.Text == text)
         {
             existing.Foreground = new SolidColorBrush(GetBpmColor());
+            _characterRuns.Clear();
             return;
         }
 
         BpmText.Inlines.Clear();
+        _characterRuns.Clear();
+        char[] chars = text.ToCharArray();
 
-        if (_vm.ColorMode == "逐字渐变")
+        if (perCharacter)
         {
-            GetGradientColors(out Color from, out Color to);
-            char[] chars = text.ToCharArray();
             for (int i = 0; i < chars.Length; i++)
             {
-                double t = chars.Length > 1 ? (double)i / (chars.Length - 1) : 0;
-                BpmText.Inlines.Add(new Run(chars[i].ToString()) { Foreground = new SolidColorBrush(Lerp(from, to, t)) });
+                Color color;
+                if (_vm.ColorMode == "逐字渐变")
+                {
+                    GetGradientColors(out Color from, out Color to);
+                    double t = chars.Length > 1 ? (double)i / (chars.Length - 1) : 0;
+                    color = Lerp(from, to, t);
+                }
+                else
+                {
+                    bool light = i < _characterLightText.Length ? _characterLightText[i] : EffectiveLightText();
+                    color = light ? LightFg : DarkFg;
+                }
+                var run = new Run(chars[i].ToString()) { Foreground = new SolidColorBrush(color) };
+                _characterRuns.Add(run);
+                BpmText.Inlines.Add(run);
             }
         }
         else
@@ -269,6 +333,8 @@ public partial class OverlayWindow : Window
         _disposed = true;
         Loaded -= OnLoaded;
         Closed -= OnClosed;
+        LocationChanged -= OnGeometryChanged;
+        SizeChanged -= OnGeometryChanged;
         _vm.PropertyChanged -= OnVmPropertyChanged;
         if (_inversionTimer is not null)
         {

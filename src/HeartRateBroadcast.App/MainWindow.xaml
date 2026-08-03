@@ -182,7 +182,7 @@
                                         <sys:String>强制浅字</sys:String>
                                         <sys:String>强制深字</sys:String>
                                     </ComboBox>
-                                    <TextBlock Text="透明背景下按屏幕亮度自动切换字体深浅" Foreground="{StaticResource TextFaint}" FontSize="11" Margin="0,5,0,0"/>
+                                    <TextBlock Text="透明背景下按每个字符的实际位置独立采样并切换深浅；动态背景会实时更新" TextWrapping="Wrap" Foreground="{StaticResource TextFaint}" FontSize="11" Margin="0,5,0,0"/>
 
                                     <TextBlock Text="数字字体" FontWeight="SemiBold" Margin="0,16,0,6"/>
                                     <ComboBox SelectedValue="{Binding Overlay.NumberFont, Mode=TwoWay}">

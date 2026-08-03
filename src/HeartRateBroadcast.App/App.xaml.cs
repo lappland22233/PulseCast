@@ -36,6 +36,7 @@ public partial class App : Application
             collection.AddSingleton<IHeartRateStateService, HeartRateStateService>();
             collection.AddSingleton<DisplayPlacementService>();
             collection.AddSingleton<IScreenLuminanceSampler, ScreenLuminanceSampler>();
+            collection.AddSingleton<CharacterContrastService>();
             collection.AddSingleton<OverlayViewModel>();
             collection.AddSingleton<OverlayWindow>();
             collection.AddSingleton<IOverlayWindowManager, OverlayWindowManager>();
