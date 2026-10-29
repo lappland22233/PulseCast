@@ -1,8 +1,37 @@
+using CommunityToolkit.Mvvm.ComponentModel;
+
 namespace HeartRateBroadcast.App.Models;
 
 public enum HeartRateSource { Advertisement, Gatt }
 public enum HeartRateStatusKind { BluetoothUnavailable, Scanning, Waiting, Live, Stale, Error }
 public enum BluetoothScanStatus { Idle, Starting, Scanning, Stopping, Error }
+
+public enum HeartRateDeviceCategory
+{
+    Broadcasting,      // 正在广播心率（免连接）
+    GattService,       // 声明了心率服务 0x180D
+    CandidateName,     // 运动/手环/心率品牌候选设备
+    GenericBle         // 普通未知/无关 BLE 设备
+}
+
+public static class HeartRateDeviceClassifier
+{
+    private static readonly string[] Keywords =
+    [
+        "HEART", "HRM", "HR", "PULSE", "CARDIO", "CHEST", "ARMBAND", "STRAP",
+        "BAND", "WATCH", "FIT",
+        "GARMIN", "POLAR", "COROS", "SUUNTO", "WAHOO", "MAGENE", "COOSPO",
+        "FITBIT", "HUAWEI", "HONOR", "XIAOMI", "AMAZFIT", "WHOOP", "DECATHLON",
+        "IGPSPORT", "XOSS", "TICKR", "SPO2", "HEALTH"
+    ];
+
+    public static bool MatchesHeartRateName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name == "未知设备") return false;
+        var upper = name.ToUpperInvariant();
+        return Keywords.Any(k => upper.Contains(k, StringComparison.Ordinal));
+    }
+}
 
 public sealed record BluetoothScanState(BluetoothScanStatus Status, string Message, string? ErrorCode = null)
 {
@@ -46,12 +75,95 @@ public sealed record HeartRateDisplayState(
     public static HeartRateDisplayState Scanning { get; } = new(HeartRateStatusKind.Scanning, null, "正在扫描", null, null);
 }
 
-public sealed record DiscoveredDevice(
-    ulong Address,
-    string Name,
-    short Rssi,
-    DateTimeOffset LastSeen,
-    bool IsHeartRateCapable)
+public sealed partial class DiscoveredDevice : ObservableObject
 {
+    public ulong Address { get; }
     public string AddressText => Address.ToString("X12");
+    [ObservableProperty] private string name;
+    [ObservableProperty] private short rssi;
+    [ObservableProperty] private DateTimeOffset lastSeen;
+    [ObservableProperty] private bool isHeartRateCapable;
+    [ObservableProperty] private bool isHeartRateBroadcasting;
+    [ObservableProperty] private bool hasHeartRateService;
+
+    public bool IsNamedDevice => !string.IsNullOrWhiteSpace(Name) && Name != "未知设备";
+    public bool IsCandidateName => HeartRateDeviceClassifier.MatchesHeartRateName(Name);
+    public bool IsHeartRateCandidate => IsHeartRateBroadcasting || HasHeartRateService || IsCandidateName || IsHeartRateCapable;
+
+    public int SignalBars => Rssi switch
+    {
+        >= -60 => 4,
+        >= -72 => 3,
+        >= -84 => 2,
+        >= -94 => 1,
+        _ => 0,
+    };
+
+    public HeartRateDeviceCategory Category =>
+        IsHeartRateBroadcasting ? HeartRateDeviceCategory.Broadcasting :
+        HasHeartRateService ? HeartRateDeviceCategory.GattService :
+        (IsCandidateName || IsHeartRateCapable) ? HeartRateDeviceCategory.CandidateName :
+        HeartRateDeviceCategory.GenericBle;
+
+    public string CategoryBadgeText => Category switch
+    {
+        HeartRateDeviceCategory.Broadcasting => "广播心率",
+        HeartRateDeviceCategory.GattService => "GATT心率",
+        HeartRateDeviceCategory.CandidateName => "心率/手环",
+        _ => "其他BLE",
+    };
+
+    public string SignalStrengthDescription => Rssi switch
+    {
+        >= -60 => $"极佳 · {Rssi} dBm",
+        >= -72 => $"良好 · {Rssi} dBm",
+        >= -84 => $"一般 · {Rssi} dBm",
+        _ => $"较弱 · {Rssi} dBm",
+    };
+
+    public DiscoveredDevice(
+        ulong address,
+        string name,
+        short rssi,
+        DateTimeOffset lastSeen,
+        bool isHeartRateCapable,
+        bool isHeartRateBroadcasting = false,
+        bool hasHeartRateService = false)
+    {
+        Address = address;
+        this.name = name;
+        this.rssi = rssi;
+        this.lastSeen = lastSeen;
+        this.isHeartRateCapable = isHeartRateCapable;
+        this.isHeartRateBroadcasting = isHeartRateBroadcasting;
+        this.hasHeartRateService = hasHeartRateService;
+    }
+
+    public void Update(
+        short newRssi,
+        DateTimeOffset seen,
+        string? newName,
+        bool capable,
+        bool broadcasting = false,
+        bool hasGattService = false)
+    {
+        Rssi = newRssi;
+        LastSeen = seen;
+        if (!string.IsNullOrWhiteSpace(newName) && newName != "未知设备")
+            Name = newName;
+        if (capable)
+            IsHeartRateCapable = true;
+        if (broadcasting)
+            IsHeartRateBroadcasting = true;
+        if (hasGattService)
+            HasHeartRateService = true;
+
+        OnPropertyChanged(nameof(SignalBars));
+        OnPropertyChanged(nameof(SignalStrengthDescription));
+        OnPropertyChanged(nameof(Category));
+        OnPropertyChanged(nameof(CategoryBadgeText));
+        OnPropertyChanged(nameof(IsNamedDevice));
+        OnPropertyChanged(nameof(IsCandidateName));
+        OnPropertyChanged(nameof(IsHeartRateCandidate));
+    }
 }

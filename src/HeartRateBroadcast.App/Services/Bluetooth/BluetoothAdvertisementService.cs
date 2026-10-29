@@ -80,9 +80,11 @@ public sealed class BluetoothAdvertisementService : IBluetoothAdvertisementServi
     {
         var sections = args.Advertisement.DataSections.Select(s => new BluetoothDataSection(s.DataType, s.Data.ToArray())).ToArray();
         var manufacturer = args.Advertisement.ManufacturerData.FirstOrDefault();
+        string deviceName = BluetoothNameDecoder.Decode(sections, args.Advertisement.LocalName);
+
         PacketReceived?.Invoke(this, new BluetoothPacket(
             args.BluetoothAddress,
-            string.IsNullOrWhiteSpace(args.Advertisement.LocalName) ? "未知设备" : args.Advertisement.LocalName,
+            deviceName,
             args.RawSignalStrengthInDBm,
             args.Timestamp,
             args.Advertisement.ServiceUuids.ToArray(),

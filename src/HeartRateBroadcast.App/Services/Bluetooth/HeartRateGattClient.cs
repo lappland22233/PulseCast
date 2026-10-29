@@ -11,6 +11,7 @@ namespace HeartRateBroadcast.App.Services.Bluetooth;
 public interface IHeartRateGattClient : IAsyncDisposable
 {
     event EventHandler<HeartRateSample>? SampleReceived;
+    event EventHandler<ulong>? Disconnected;
     Task ConnectAsync(ulong address, CancellationToken cancellationToken = default);
     void CancelConnect();
     Task DisconnectAsync();
@@ -31,6 +32,7 @@ public sealed class HeartRateGattClient : IHeartRateGattClient
     private bool _disposed;
 
     public event EventHandler<HeartRateSample>? SampleReceived;
+    public event EventHandler<ulong>? Disconnected;
 
     public async Task ConnectAsync(ulong address, CancellationToken cancellationToken = default)
     {
@@ -49,12 +51,22 @@ public sealed class HeartRateGattClient : IHeartRateGattClient
             GattDeviceService? service = null;
             GattCharacteristic? characteristic = null;
             TypedEventHandler<GattCharacteristic, GattValueChangedEventArgs>? handler = null;
+            TypedEventHandler<BluetoothLEDevice, object>? connectionHandler = null;
             var sessionId = Interlocked.Increment(ref _nextSessionId);
 
             try
             {
                 device = await BluetoothLEDevice.FromBluetoothAddressAsync(address).AsTask(linkedCts.Token).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("无法打开蓝牙设备");
+
+                connectionHandler = (dev, _) =>
+                {
+                    if (dev.ConnectionStatus == BluetoothConnectionStatus.Disconnected && Interlocked.Read(ref _activeSessionId) == sessionId)
+                    {
+                        Disconnected?.Invoke(this, address);
+                    }
+                };
+                device.ConnectionStatusChanged += connectionHandler;
 
                 var services = await device.GetGattServicesForUuidAsync(HeartRateService, BluetoothCacheMode.Uncached)
                     .AsTask(linkedCts.Token).ConfigureAwait(false);
@@ -79,21 +91,22 @@ public sealed class HeartRateGattClient : IHeartRateGattClient
                     throw new InvalidOperationException($"心率通知订阅失败：{status}");
 
                 var lifetimeCts = new CancellationTokenSource();
-                _session = new(sessionId, address, device, service, characteristic, handler, lifetimeCts);
+                _session = new(sessionId, address, device, service, characteristic, handler, connectionHandler, lifetimeCts);
                 Interlocked.Exchange(ref _activeSessionId, sessionId);
                 device = null;
                 service = null;
                 characteristic = null;
                 handler = null;
+                connectionHandler = null;
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                await CleanupResourcesAsync(characteristic, handler, service, device).ConfigureAwait(false);
+                await CleanupResourcesAsync(characteristic, handler, device, connectionHandler, service).ConfigureAwait(false);
                 throw new TimeoutException($"连接心率设备超过 {ConnectTimeout.TotalSeconds:0} 秒");
             }
             catch
             {
-                await CleanupResourcesAsync(characteristic, handler, service, device).ConfigureAwait(false);
+                await CleanupResourcesAsync(characteristic, handler, device, connectionHandler, service).ConfigureAwait(false);
                 throw;
             }
             finally
@@ -145,16 +158,20 @@ public sealed class HeartRateGattClient : IHeartRateGattClient
         if (session is null) return;
 
         session.LifetimeCts.Cancel();
-        await CleanupResourcesAsync(session.Characteristic, session.Handler, session.Service, session.Device).ConfigureAwait(false);
+        await CleanupResourcesAsync(session.Characteristic, session.Handler, session.Device, session.ConnectionHandler, session.Service).ConfigureAwait(false);
         session.LifetimeCts.Dispose();
     }
 
     private static async Task CleanupResourcesAsync(
         GattCharacteristic? characteristic,
         TypedEventHandler<GattCharacteristic, GattValueChangedEventArgs>? handler,
-        GattDeviceService? service,
-        BluetoothLEDevice? device)
+        BluetoothLEDevice? device,
+        TypedEventHandler<BluetoothLEDevice, object>? connectionHandler,
+        GattDeviceService? service)
     {
+        if (device is not null && connectionHandler is not null)
+            device.ConnectionStatusChanged -= connectionHandler;
+
         if (characteristic is not null && handler is not null)
             characteristic.ValueChanged -= handler;
 
@@ -207,5 +224,6 @@ public sealed class HeartRateGattClient : IHeartRateGattClient
         GattDeviceService Service,
         GattCharacteristic Characteristic,
         TypedEventHandler<GattCharacteristic, GattValueChangedEventArgs> Handler,
+        TypedEventHandler<BluetoothLEDevice, object> ConnectionHandler,
         CancellationTokenSource LifetimeCts);
 }

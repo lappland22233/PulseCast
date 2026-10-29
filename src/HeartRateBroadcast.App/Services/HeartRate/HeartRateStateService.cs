@@ -46,7 +46,29 @@ public sealed class HeartRateStateService : IHeartRateStateService
     public ulong? SelectedAddress
     {
         get { lock (_gate) return _selectedAddress; }
-        set { lock (_gate) _selectedAddress = value; }
+        set
+        {
+            HeartRateDisplayState? newState = null;
+            lock (_gate)
+            {
+                if (_selectedAddress != value)
+                {
+                    _selectedAddress = value;
+                    _lastSampleAt = null;
+                    if (_current.Kind == HeartRateStatusKind.Live || _current.Kind == HeartRateStatusKind.Stale)
+                    {
+                        newState = new HeartRateDisplayState(
+                            HeartRateStatusKind.Waiting,
+                            null,
+                            value is null ? "准备扫描" : "等待心率",
+                            null,
+                            value);
+                        _current = newState;
+                    }
+                }
+            }
+            if (newState is not null) StateChanged?.Invoke(this, newState);
+        }
     }
 
     public HeartRateStateService(
@@ -79,21 +101,40 @@ public sealed class HeartRateStateService : IHeartRateStateService
 
         lock (_gate)
         {
-            _devices.TryGetValue(packet.Address, out var previous);
-            snapshot = new DiscoveredDevice(
-                packet.Address,
-                packet.Name,
-                packet.Rssi,
-                packet.ReceivedAt,
-                previous?.IsHeartRateCapable == true || parsed.Sample is not null ||
-                packet.ServiceUuids.Contains(Windows.Devices.Bluetooth.GenericAttributeProfile.GattServiceUuids.HeartRate));
-            _devices[packet.Address] = snapshot;
+            bool broadcasting = parsed.Sample is not null;
+            bool hasGattService = packet.ServiceUuids.Contains(Windows.Devices.Bluetooth.GenericAttributeProfile.GattServiceUuids.HeartRate);
+            bool isCandidate = broadcasting || hasGattService || HeartRateDeviceClassifier.MatchesHeartRateName(packet.Name);
+
+            if (_devices.TryGetValue(packet.Address, out var existing))
+            {
+                existing.Update(
+                    packet.Rssi,
+                    packet.ReceivedAt,
+                    packet.Name,
+                    capable: isCandidate || existing.IsHeartRateCapable,
+                    broadcasting: broadcasting || existing.IsHeartRateBroadcasting,
+                    hasGattService: hasGattService || existing.HasHeartRateService);
+                snapshot = existing;
+            }
+            else
+            {
+                snapshot = new DiscoveredDevice(
+                    packet.Address,
+                    packet.Name,
+                    packet.Rssi,
+                    packet.ReceivedAt,
+                    isHeartRateCapable: isCandidate,
+                    isHeartRateBroadcasting: broadcasting,
+                    hasHeartRateService: hasGattService);
+                _devices[packet.Address] = snapshot;
+            }
 
             if (_devices.Count > MaximumDevices)
             {
                 removed = _devices.Values
                     .Where(device => device.Address != _selectedAddress)
-                    .OrderBy(device => device.LastSeen)
+                    .OrderBy(device => device.IsHeartRateCandidate ? 1 : 0)
+                    .ThenBy(device => device.LastSeen)
                     .Take(_devices.Count - MaximumDevices)
                     .Select(device => device.Address)
                     .ToList();

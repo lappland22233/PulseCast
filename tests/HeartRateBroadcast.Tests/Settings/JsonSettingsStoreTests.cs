@@ -60,6 +60,30 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal("等宽", settings.Overlay.NumberFont);
     }
 
+    [Theory]
+    [InlineData("纯白")]
+    [InlineData("深黑")]
+    [InlineData("心率红")]
+    [InlineData("荧光绿")]
+    [InlineData("天蓝")]
+    [InlineData("琥珀")]
+    [InlineData("橙")]
+    [InlineData("玫红")]
+    public void Normalize_PreservesAllValidSolidColors(string color)
+    {
+        var settings = new OverlaySettings { SolidColor = color };
+        settings.Normalize();
+        Assert.Equal(color, settings.SolidColor);
+    }
+
+    [Fact]
+    public void Normalize_FallbacksInvalidSolidColorToPureWhite()
+    {
+        var settings = new OverlaySettings { SolidColor = "invalid_color" };
+        settings.Normalize();
+        Assert.Equal("纯白", settings.SolidColor);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory)) Directory.Delete(_directory, true);

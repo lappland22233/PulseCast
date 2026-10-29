@@ -22,7 +22,14 @@ public sealed class TopmostWindowService : IDisposable
         _window = window;
         _watchdog = new(_ =>
         {
-            if (!_disposed) _window.Dispatcher.BeginInvoke(EnsureTopmost);
+            if (!_disposed)
+            {
+                _window.Dispatcher.BeginInvoke(() =>
+                {
+                    try { EnsureTopmost(); }
+                    catch (Win32Exception) { }
+                });
+            }
         }, null, Timeout.Infinite, Timeout.Infinite);
     }
 
@@ -129,6 +136,7 @@ public interface IOverlayWindowManager
     bool IsLocked { get; }
     bool IsBackgroundHidden { get; }
     bool IsClickThrough { get; }
+    event EventHandler? PlacementChanged;
     void Show();
     void SetLocked(bool locked);
     void SetBackgroundHidden(bool hidden);
@@ -149,6 +157,7 @@ public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
     public bool IsLocked => _settings.Locked;
     public bool IsBackgroundHidden => _settings.HideBackground;
     public bool IsClickThrough => _settings.ClickThrough;
+    public event EventHandler? PlacementChanged;
 
     public OverlayWindowManager(OverlayWindow window, AppSettings settings, DisplayPlacementService placement)
     {
@@ -218,6 +227,7 @@ public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
         _settings.MonitorDeviceName = deviceName;
         _settings.RightOffset = Math.Max(0, area.Right - Window.Left - Window.ActualWidth);
         _settings.TopOffset = Math.Max(0, Window.Top - area.Top);
+        PlacementChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnDisplayChanged(object? sender, EventArgs e) => Window.Dispatcher.BeginInvoke(ScheduleDisplayUpdate);

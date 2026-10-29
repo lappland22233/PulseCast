@@ -66,7 +66,7 @@ public sealed class OverlaySettings
         NumberFont = Valid(NumberFont, ["等宽", "仪表", "无衬线"], "等宽");
         InversionMode = Valid(InversionMode, ["自动", "强制浅字", "强制深字"], "自动");
         ColorMode = Valid(ColorMode, ["自动", "逐字渐变", "单色"], "自动");
-        SolidColor = Valid(SolidColor, ["纯白", "纯黑", "红色", "蓝色", "绿色", "黄色"], "纯白");
+        SolidColor = Valid(SolidColor, ["纯白", "深黑", "心率红", "荧光绿", "天蓝", "琥珀", "橙", "玫红"], "纯白");
         GradientId = Valid(GradientId, ["红粉", "冰蓝", "翠绿", "金橙"], "红粉");
     }
 

@@ -1,4 +1,5 @@
-﻿using System.IO;
+using System.IO;
+using System.Text;
 using System.Windows;
 using HeartRateBroadcast.App.Models;
 using HeartRateBroadcast.App.Services.Bluetooth;
@@ -23,6 +24,8 @@ public partial class App : Application
         base.OnStartup(e);
         try
         {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
             var settingsStore = new JsonSettingsStore();
             AppSettings settings = await settingsStore.LoadAsync();
             settings.Normalize();

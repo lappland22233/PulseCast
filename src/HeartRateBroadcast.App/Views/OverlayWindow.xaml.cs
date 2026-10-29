@@ -28,6 +28,7 @@ public partial class OverlayWindow : Window
     private bool? _appliedLightText;
     private CancellationTokenSource? _sampleCts;
     private bool _sampleInProgress;
+    private bool _needsResample;
     private int _stableSampleCount;
     private bool _disposed;
 
@@ -67,7 +68,7 @@ public partial class OverlayWindow : Window
         _stableSampleCount = 0;
         if (_inversionTimer is not null) _inversionTimer.Interval = TimeSpan.FromMilliseconds(125);
         if (!IsLoaded || !ShouldUsePerCharacterInversion()) return;
-        Dispatcher.BeginInvoke(async () => await SampleAndApplyAsync(), System.Windows.Threading.DispatcherPriority.Render);
+        _ = Dispatcher.InvokeAsync(SampleAndApplyAsync, System.Windows.Threading.DispatcherPriority.Render);
     }
 
     private bool ShouldUsePerCharacterInversion() =>
@@ -110,12 +111,20 @@ public partial class OverlayWindow : Window
     /// <summary>在后台单航班采样字符实际屏幕区域，并按字符增量更新前景色。</summary>
     private async Task SampleAndApplyAsync()
     {
-        if (_disposed || _sampleInProgress || !IsVisible || !ShouldUsePerCharacterInversion()) return;
+        if (_disposed || !IsVisible || !ShouldUsePerCharacterInversion()) return;
+        if (_sampleInProgress)
+        {
+            _needsResample = true;
+            _sampleCts?.Cancel();
+            return;
+        }
+
         IReadOnlyList<Int32Rect> regions = GetCharacterScreenRegions();
         Int32Rect union = CharacterContrastService.Union(regions);
         if (union.IsEmpty) return;
 
         _sampleInProgress = true;
+        _needsResample = false;
         _sampleCts?.Cancel();
         _sampleCts?.Dispose();
         _sampleCts = new CancellationTokenSource();
@@ -129,6 +138,19 @@ public partial class OverlayWindow : Window
             {
                 _characterLightText = decisions.ToArray();
                 ApplyCharacterColors();
+
+                // 同步非数字元素（爱心、单位、Live）的反色：按字符多数表决判定
+                if (decisions.Count > 0)
+                {
+                    int lightCount = decisions.Count(d => d);
+                    bool majorityLight = lightCount >= (decisions.Count - lightCount);
+                    if (_vm.IsLightText != majorityLight)
+                    {
+                        _vm.IsLightText = majorityLight;
+                    }
+                    ApplyTheme(force: true);
+                }
+
                 _stableSampleCount = 0;
             }
             else
@@ -142,23 +164,38 @@ public partial class OverlayWindow : Window
         finally
         {
             _sampleInProgress = false;
+            if (_needsResample && !_disposed && IsVisible && ShouldUsePerCharacterInversion())
+            {
+                _needsResample = false;
+                _ = Dispatcher.InvokeAsync(SampleAndApplyAsync, System.Windows.Threading.DispatcherPriority.Render);
+            }
         }
     }
 
     private List<Int32Rect> GetCharacterScreenRegions()
     {
         var result = new List<Int32Rect>(_characterRuns.Count);
+        if (!IsVisible || PresentationSource.FromVisual(BpmText) is null)
+            return result;
+
         foreach (Run run in _characterRuns)
         {
-            Rect start = run.ContentStart.GetCharacterRect(LogicalDirection.Forward);
-            Rect end = run.ContentEnd.GetCharacterRect(LogicalDirection.Backward);
-            Point topLeft = BpmText.PointToScreen(new Point(Math.Min(start.Left, end.Left), Math.Min(start.Top, end.Top)));
-            Point bottomRight = BpmText.PointToScreen(new Point(Math.Max(start.Right, end.Right), Math.Max(start.Bottom, end.Bottom)));
-            int left = (int)Math.Floor(Math.Min(topLeft.X, bottomRight.X));
-            int top = (int)Math.Floor(Math.Min(topLeft.Y, bottomRight.Y));
-            int right = (int)Math.Ceiling(Math.Max(topLeft.X, bottomRight.X));
-            int bottom = (int)Math.Ceiling(Math.Max(topLeft.Y, bottomRight.Y));
-            result.Add(right > left && bottom > top ? new Int32Rect(left, top, right - left, bottom - top) : Int32Rect.Empty);
+            try
+            {
+                Rect start = run.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                Rect end = run.ContentEnd.GetCharacterRect(LogicalDirection.Backward);
+                Point topLeft = BpmText.PointToScreen(new Point(Math.Min(start.Left, end.Left), Math.Min(start.Top, end.Top)));
+                Point bottomRight = BpmText.PointToScreen(new Point(Math.Max(start.Right, end.Right), Math.Max(start.Bottom, end.Bottom)));
+                int left = (int)Math.Floor(Math.Min(topLeft.X, bottomRight.X));
+                int top = (int)Math.Floor(Math.Min(topLeft.Y, bottomRight.Y));
+                int right = (int)Math.Ceiling(Math.Max(topLeft.X, bottomRight.X));
+                int bottom = (int)Math.Ceiling(Math.Max(topLeft.Y, bottomRight.Y));
+                result.Add(right > left && bottom > top ? new Int32Rect(left, top, right - left, bottom - top) : Int32Rect.Empty);
+            }
+            catch (InvalidOperationException)
+            {
+                result.Add(Int32Rect.Empty);
+            }
         }
         return result;
     }
