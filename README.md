@@ -1,3 +1,4 @@
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/lappland22233/badge.svg)](https://hub.xerj.org/contributors/lappland22233)
 # PulseCast 心率广播
 
 PulseCast 是面向 Windows 11 x64 的 WPF 桌面应用，用于发现 BLE 心率设备，通过标准广播或 GATT 心率服务接收数据，并用置顶悬浮窗显示实时 BPM。
