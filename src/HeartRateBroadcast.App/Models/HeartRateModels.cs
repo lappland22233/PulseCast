@@ -29,7 +29,11 @@ public static class HeartRateDeviceClassifier
     {
         if (string.IsNullOrWhiteSpace(name) || name == "未知设备") return false;
         var upper = name.ToUpperInvariant();
-        return Keywords.Any(k => upper.Contains(k, StringComparison.Ordinal));
+        foreach (var keyword in Keywords)
+        {
+            if (upper.Contains(keyword, StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 }
 
@@ -60,7 +64,9 @@ public sealed record HeartRateSample(
 
 public sealed record HeartRateParseResult(bool Matched, HeartRateSample? Sample, string? Error)
 {
-    public static HeartRateParseResult NoMatch() => new(false, null, null);
+    private static readonly HeartRateParseResult NoMatchResult = new(false, null, null);
+
+    public static HeartRateParseResult NoMatch() => NoMatchResult;
     public static HeartRateParseResult Success(HeartRateSample sample) => new(true, sample, null);
     public static HeartRateParseResult Invalid(string error) => new(true, null, error);
 }
@@ -75,19 +81,44 @@ public sealed record HeartRateDisplayState(
     public static HeartRateDisplayState Scanning { get; } = new(HeartRateStatusKind.Scanning, null, "正在扫描", null, null);
 }
 
+public readonly record struct DeviceSnapshot(
+    ulong Address,
+    string Name,
+    short Rssi,
+    DateTimeOffset LastSeen,
+    bool IsHeartRateCapable,
+    bool IsHeartRateBroadcasting,
+    bool HasHeartRateService)
+{
+    public bool IsHeartRateCandidate => IsHeartRateCapable || IsHeartRateBroadcasting || HasHeartRateService;
+}
+
 public sealed partial class DiscoveredDevice : ObservableObject
 {
+    private string? _addressText;
+    private bool _isCandidateName;
+
     public ulong Address { get; }
-    public string AddressText => Address.ToString("X12");
-    [ObservableProperty] private string name;
-    [ObservableProperty] private short rssi;
+    public string AddressText => _addressText ??= Address.ToString("X12");
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsNamedDevice), nameof(IsCandidateName), nameof(IsHeartRateCandidate), nameof(Category), nameof(CategoryBadgeText))]
+    private string name;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SignalBars), nameof(SignalStrengthDescription))]
+    private short rssi;
     [ObservableProperty] private DateTimeOffset lastSeen;
-    [ObservableProperty] private bool isHeartRateCapable;
-    [ObservableProperty] private bool isHeartRateBroadcasting;
-    [ObservableProperty] private bool hasHeartRateService;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsHeartRateCandidate), nameof(Category), nameof(CategoryBadgeText))]
+    private bool isHeartRateCapable;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsHeartRateCandidate), nameof(Category), nameof(CategoryBadgeText))]
+    private bool isHeartRateBroadcasting;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsHeartRateCandidate), nameof(Category), nameof(CategoryBadgeText))]
+    private bool hasHeartRateService;
 
     public bool IsNamedDevice => !string.IsNullOrWhiteSpace(Name) && Name != "未知设备";
-    public bool IsCandidateName => HeartRateDeviceClassifier.MatchesHeartRateName(Name);
+    public bool IsCandidateName => _isCandidateName;
     public bool IsHeartRateCandidate => IsHeartRateBroadcasting || HasHeartRateService || IsCandidateName || IsHeartRateCapable;
 
     public int SignalBars => Rssi switch
@@ -132,6 +163,7 @@ public sealed partial class DiscoveredDevice : ObservableObject
     {
         Address = address;
         this.name = name;
+        _isCandidateName = HeartRateDeviceClassifier.MatchesHeartRateName(name);
         this.rssi = rssi;
         this.lastSeen = lastSeen;
         this.isHeartRateCapable = isHeartRateCapable;
@@ -139,31 +171,5 @@ public sealed partial class DiscoveredDevice : ObservableObject
         this.hasHeartRateService = hasHeartRateService;
     }
 
-    public void Update(
-        short newRssi,
-        DateTimeOffset seen,
-        string? newName,
-        bool capable,
-        bool broadcasting = false,
-        bool hasGattService = false)
-    {
-        Rssi = newRssi;
-        LastSeen = seen;
-        if (!string.IsNullOrWhiteSpace(newName) && newName != "未知设备")
-            Name = newName;
-        if (capable)
-            IsHeartRateCapable = true;
-        if (broadcasting)
-            IsHeartRateBroadcasting = true;
-        if (hasGattService)
-            HasHeartRateService = true;
-
-        OnPropertyChanged(nameof(SignalBars));
-        OnPropertyChanged(nameof(SignalStrengthDescription));
-        OnPropertyChanged(nameof(Category));
-        OnPropertyChanged(nameof(CategoryBadgeText));
-        OnPropertyChanged(nameof(IsNamedDevice));
-        OnPropertyChanged(nameof(IsCandidateName));
-        OnPropertyChanged(nameof(IsHeartRateCandidate));
-    }
+    partial void OnNameChanged(string value) => _isCandidateName = HeartRateDeviceClassifier.MatchesHeartRateName(value);
 }

@@ -32,9 +32,11 @@ public sealed class StandardHeartRateAdvertisementParser : IHeartRatePacketParse
 
     public HeartRateParseResult TryParse(BluetoothPacket packet)
     {
-        foreach (var section in packet.Sections.Where(s => s.Type == ServiceData16BitType))
+        var sections = packet.Sections;
+        for (int index = 0; index < sections.Count; index++)
         {
-            if (section.Data.Length < 4 || section.Data[0] != 0x0D || section.Data[1] != 0x18) continue;
+            var section = sections[index];
+            if (section.Type != ServiceData16BitType || section.Data.Length < 4 || section.Data[0] != 0x0D || section.Data[1] != 0x18) continue;
             if (!HeartRateMeasurementParser.TryParse(section.Data.AsSpan(2), out ushort bpm))
                 return HeartRateParseResult.Invalid("标准心率服务数据长度无效");
             return HeartRateParseResult.Success(new(bpm, packet.Address, packet.ReceivedAt, HeartRateSource.Advertisement, Name));

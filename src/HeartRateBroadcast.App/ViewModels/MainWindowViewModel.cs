@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Windows;
 using System.Windows.Data;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -13,7 +14,7 @@ using HeartRateBroadcast.App.Services.Settings;
 
 namespace HeartRateBroadcast.App.ViewModels;
 
-public partial class MainWindowViewModel : ObservableObject
+public partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private readonly IBluetoothAdvertisementService _bluetooth;
     private readonly IHeartRateGattClient _gattClient;
@@ -21,9 +22,21 @@ public partial class MainWindowViewModel : ObservableObject
     private readonly IOverlayWindowManager _overlay;
     private readonly ISettingsStore _settingsStore;
     private readonly AppSettings _settings;
+    private readonly Dispatcher _dispatcher;
     private readonly DispatcherTimer _saveDebounceTimer;
+    private readonly DispatcherTimer _deviceUpdatesTimer;
+    private readonly ObservableCollection<DiscoveredDevice> _devices = [];
+    private readonly Dictionary<ulong, DiscoveredDevice> _devicesByAddress = [];
+    private readonly object _deviceUpdatesGate = new();
+    private readonly HashSet<ulong> _deliveredDeviceAddresses = [];
+    private Dictionary<ulong, DeviceSnapshot?> _pendingDeviceUpdates = [];
+    private Dictionary<ulong, DeviceSnapshot?> _deviceUpdatesToApply = [];
+    private string _searchQuery = string.Empty;
+    private bool _hasNoDevices = true;
+    private string _emptyStateText = string.Empty;
+    private bool _deviceViewActive;
+    private bool _disposed;
 
-    public ObservableCollection<DiscoveredDevice> Devices { get; } = [];
     public ICollectionView FilteredDevices { get; }
 
     /// <summary>共享的悬浮窗视图模型：主窗口直接绑定其样式/反色属性，实时联动悬浮窗。</summary>
@@ -48,28 +61,18 @@ public partial class MainWindowViewModel : ObservableObject
 
     public string ConnectButtonText => IsConnecting ? "连接中…" : "连接所选设备";
     public string ScanButtonText => IsScanning ? "停止扫描" : "开始扫描";
-    public bool HasNoDevices => FilteredDevices.IsEmpty;
+    public bool HasSearchText => !string.IsNullOrEmpty(SearchText);
+
+    public bool HasNoDevices
+    {
+        get => _hasNoDevices;
+        private set => SetProperty(ref _hasNoDevices, value);
+    }
 
     public string EmptyStateText
     {
-        get
-        {
-            if (Devices.Count == 0)
-                return IsScanning ? "正在雷达搜索附近的心率设备…" : "未发现设备，请检查电脑蓝牙是否已开启后点击“开始扫描”。";
-
-            if (FilteredDevices.IsEmpty)
-            {
-                if (!string.IsNullOrWhiteSpace(SearchText))
-                    return $"未找到与“{SearchText}”匹配的设备。";
-                if (FilterHeartRateOnly)
-                    return "当前未过滤到心率设备。\n请确保手环/心率带已开启“心率广播/共享心率”，或切换至【全部设备】查看。";
-                if (HideUnknownDevices)
-                    return "附近发现的设备均为无名匿名设备，已自动隐藏。\n可取消“过滤匿名”查看所有信标。";
-                return "当前筛选条件下无可用设备。";
-            }
-
-            return string.Empty;
-        }
+        get => _emptyStateText;
+        private set => SetProperty(ref _emptyStateText, value);
     }
 
     public System.Windows.Media.Brush StatusBrush => StatusKind switch
@@ -80,8 +83,9 @@ public partial class MainWindowViewModel : ObservableObject
         _ => (System.Windows.Media.Brush)System.Windows.Application.Current.Resources["Info"],
     };
 
-    public string OverlayLockButtonText => IsOverlayLocked ? "解除固定" : "固定悬浮窗";
-    public string OverlayBackgroundButtonText => IsOverlayBackgroundHidden ? "显示卡片" : "透明背景";
+    public string OverlayLockButtonText => IsOverlayLocked ? "解锁位置" : "锁定位置";
+    public string OverlayBackgroundButtonText => IsOverlayBackgroundHidden ? "显示背景" : "隐藏背景";
+    public string OverlayClickThroughButtonText => IsOverlayClickThrough ? "关闭穿透" : "开启穿透";
 
     public MainWindowViewModel(
         IBluetoothAdvertisementService bluetooth,
@@ -98,49 +102,66 @@ public partial class MainWindowViewModel : ObservableObject
         _overlay = overlay;
         _settingsStore = settingsStore;
         _settings = settings;
+        _dispatcher = Application.Current.Dispatcher;
         Overlay = overlayViewModel;
 
-        FilteredDevices = CollectionViewSource.GetDefaultView(Devices);
-        FilteredDevices.Filter = FilterDevicePredicate;
-        FilteredDevices.SortDescriptions.Add(new SortDescription(nameof(DiscoveredDevice.IsHeartRateCandidate), ListSortDirection.Descending));
-        FilteredDevices.SortDescriptions.Add(new SortDescription(nameof(DiscoveredDevice.Rssi), ListSortDirection.Descending));
+        var devicesView = (ListCollectionView)CollectionViewSource.GetDefaultView(_devices);
+        using (devicesView.DeferRefresh())
+        {
+            devicesView.Filter = FilterDevicePredicate;
+            devicesView.SortDescriptions.Add(new SortDescription(nameof(DiscoveredDevice.IsHeartRateCandidate), ListSortDirection.Descending));
+            devicesView.SortDescriptions.Add(new SortDescription(nameof(DiscoveredDevice.Rssi), ListSortDirection.Descending));
+            devicesView.LiveFilteringProperties.Add(nameof(DiscoveredDevice.Name));
+            devicesView.LiveFilteringProperties.Add(nameof(DiscoveredDevice.IsHeartRateCandidate));
+            devicesView.IsLiveSorting = true;
+            devicesView.IsLiveFiltering = true;
+        }
+        FilteredDevices = devicesView;
+        ((INotifyPropertyChanged)devicesView).PropertyChanged += OnFilteredDevicesPropertyChanged;
 
-        IsOverlayLocked = _overlay.IsLocked;
-        IsOverlayBackgroundHidden = _overlay.IsBackgroundHidden;
-        IsOverlayClickThrough = _overlay.IsClickThrough;
+        _deviceUpdatesTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromMilliseconds(100),
+        };
+        _deviceUpdatesTimer.Tick += ApplyPendingDeviceUpdates;
+
+        _saveDebounceTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _saveDebounceTimer.Tick += OnSaveDebounceTick;
+
+        RefreshOverlayControls();
         _state.DeviceChanged += OnDeviceChanged;
         _state.DeviceRemoved += OnDeviceRemoved;
-        _state.StateChanged += (_, value) => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-        {
-            CurrentBpm = value.BeatsPerMinute?.ToString() ?? "--";
-            Status = value.Message;
-            StatusKind = value.Kind;
-        });
+        _state.StateChanged += OnStateChanged;
         _bluetooth.StatusChanged += OnBluetoothStatusChanged;
         _gattClient.Disconnected += OnGattDisconnected;
+        Overlay.PropertyChanged += OnOverlayPropertyChanged;
+        _overlay.PlacementChanged += OnOverlayPlacementChanged;
         ApplyScanState(_bluetooth.CurrentState);
+        UpdateEmptyState();
+    }
 
-        _saveDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _saveDebounceTimer.Tick += async (_, _) =>
-        {
-            _saveDebounceTimer.Stop();
-            await SaveSettingsSafelyAsync();
-        };
+    private async void OnSaveDebounceTick(object? sender, EventArgs e)
+    {
+        _saveDebounceTimer.Stop();
+        await SaveSettingsSafelyAsync();
+    }
 
-        Overlay.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName is not (nameof(OverlayViewModel.Bpm) or nameof(OverlayViewModel.Status) or nameof(OverlayViewModel.IsLive) or nameof(OverlayViewModel.IsLightText)))
-            {
-                _saveDebounceTimer.Stop();
-                _saveDebounceTimer.Start();
-            }
-        };
+    private void OnOverlayPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(OverlayViewModel.Bpm) or nameof(OverlayViewModel.Status) or nameof(OverlayViewModel.IsLive) or nameof(OverlayViewModel.IsLightText)))
+            ScheduleSettingsSave();
+    }
 
-        _overlay.PlacementChanged += (_, _) =>
-        {
-            _saveDebounceTimer.Stop();
-            _saveDebounceTimer.Start();
-        };
+    private void OnOverlayPlacementChanged(object? sender, EventArgs e) => ScheduleSettingsSave();
+
+    private void ScheduleSettingsSave()
+    {
+        if (_disposed) return;
+        _saveDebounceTimer.Stop();
+        _saveDebounceTimer.Start();
     }
 
     private bool FilterDevicePredicate(object obj)
@@ -151,14 +172,10 @@ public partial class MainWindowViewModel : ObservableObject
         if (SelectedDevice?.Address == device.Address || _settings.SelectedDeviceAddress == device.Address)
             return true;
 
-        // 搜索关键字（匹配名称或 12 位十六进制 MAC 地址）
-        if (!string.IsNullOrWhiteSpace(SearchText))
-        {
-            string query = SearchText.Trim();
-            bool nameMatch = device.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
-            bool addrMatch = device.AddressText.Contains(query, StringComparison.OrdinalIgnoreCase);
-            if (!nameMatch && !addrMatch) return false;
-        }
+        if (_searchQuery.Length > 0 &&
+            !device.Name.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) &&
+            !device.AddressText.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase))
+            return false;
 
         // 仅心率设备模式
         if (FilterHeartRateOnly && !device.IsHeartRateCandidate)
@@ -173,14 +190,40 @@ public partial class MainWindowViewModel : ObservableObject
 
     private void ApplyFilter()
     {
+        if (_disposed) return;
         FilteredDevices.Refresh();
-        OnPropertyChanged(nameof(HasNoDevices));
-        OnPropertyChanged(nameof(EmptyStateText));
+        UpdateEmptyState();
+    }
+
+    private void OnFilteredDevicesPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ICollectionView.IsEmpty)) UpdateEmptyState();
+    }
+
+    private void UpdateEmptyState()
+    {
+        HasNoDevices = FilteredDevices.IsEmpty;
+        EmptyStateText = HasNoDevices switch
+        {
+            false => string.Empty,
+            true when _devices.Count == 0 => IsScanning ? "正在搜索附近的蓝牙设备…" : "未发现设备。开启蓝牙后开始扫描。",
+            true when _searchQuery.Length > 0 => "没有匹配的设备。",
+            true when FilterHeartRateOnly => "未发现心率设备。请开启设备的心率共享，或查看全部设备。",
+            true when HideUnknownDevices => "没有已命名的设备。可取消隐藏无名设备。",
+            _ => "没有符合筛选条件的设备。",
+        };
     }
 
     partial void OnFilterHeartRateOnlyChanged(bool value) => ApplyFilter();
     partial void OnHideUnknownDevicesChanged(bool value) => ApplyFilter();
-    partial void OnSearchTextChanged(string value) => ApplyFilter();
+    partial void OnSearchTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(HasSearchText));
+        var query = value?.Trim() ?? string.Empty;
+        if (_searchQuery == query) return;
+        _searchQuery = query;
+        ApplyFilter();
+    }
 
     [RelayCommand]
     private void ClearSearch() => SearchText = string.Empty;
@@ -191,12 +234,14 @@ public partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     private void ShowAllDevices() => FilterHeartRateOnly = false;
 
-    partial void OnSelectedDeviceChanged(DiscoveredDevice? value)
+    partial void OnSelectedDeviceChanged(DiscoveredDevice? oldValue, DiscoveredDevice? newValue)
     {
-        _state.SelectedAddress = value?.Address;
-        _settings.SelectedDeviceAddress = value?.Address;
-        Status = value is null ? "请选择设备" : $"已选择 {value.Name}";
+        _state.SelectedAddress = newValue?.Address;
+        _settings.SelectedDeviceAddress = newValue?.Address;
+        Status = newValue is null ? "请选择设备" : $"已选择 {newValue.Name}";
         ConnectSelectedDeviceCommand.NotifyCanExecuteChanged();
+        if (oldValue is not null && !FilterDevicePredicate(oldValue))
+            _dispatcher.BeginInvoke(DispatcherPriority.DataBind, (Action)ApplyFilter);
         _ = SaveSettingsSafelyAsync();
     }
 
@@ -205,7 +250,7 @@ public partial class MainWindowViewModel : ObservableObject
     partial void OnIsScanningChanged(bool value)
     {
         OnPropertyChanged(nameof(ScanButtonText));
-        OnPropertyChanged(nameof(EmptyStateText));
+        UpdateEmptyState();
     }
 
     partial void OnIsConnectingChanged(bool value)
@@ -217,56 +262,112 @@ public partial class MainWindowViewModel : ObservableObject
 
     partial void OnIsOverlayLockedChanged(bool value) => OnPropertyChanged(nameof(OverlayLockButtonText));
     partial void OnIsOverlayBackgroundHiddenChanged(bool value) => OnPropertyChanged(nameof(OverlayBackgroundButtonText));
+    partial void OnIsOverlayClickThroughChanged(bool value) => OnPropertyChanged(nameof(OverlayClickThroughButtonText));
 
-    private void OnDeviceChanged(object? sender, DiscoveredDevice device) => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+    private void OnDeviceChanged(object? sender, DeviceSnapshot device) => QueueDeviceUpdate(device.Address, device);
+    private void OnDeviceRemoved(object? sender, ulong address) => QueueDeviceUpdate(address, null);
+
+    public void SetDeviceViewActive(bool active)
     {
-        var existing = Devices.FirstOrDefault(existingDevice => existingDevice.Address == device.Address);
-        if (existing is null)
+        _dispatcher.VerifyAccess();
+        lock (_deviceUpdatesGate)
         {
-            Devices.Add(device);
+            if (_disposed || _deviceViewActive == active) return;
+            _deviceViewActive = active;
+            if (!active) _deviceUpdatesTimer.Stop();
+            else if (_pendingDeviceUpdates.Count > 0) _deviceUpdatesTimer.Start();
         }
-        else if (!ReferenceEquals(existing, device))
-        {
-            existing.Update(
-                device.Rssi,
-                device.LastSeen,
-                device.Name,
-                device.IsHeartRateCapable,
-                device.IsHeartRateBroadcasting,
-                device.HasHeartRateService);
-        }
-
-        UpdateDeviceCounts();
-        OnPropertyChanged(nameof(HasNoDevices));
-        OnPropertyChanged(nameof(EmptyStateText));
-
-        if (_settings.SelectedDeviceAddress == device.Address && SelectedDevice != (existing ?? device))
-            SelectedDevice = existing ?? device;
-    });
-
-    private void OnDeviceRemoved(object? sender, ulong address) => System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
-    {
-        var existing = Devices.FirstOrDefault(device => device.Address == address);
-        if (existing is not null)
-        {
-            Devices.Remove(existing);
-            UpdateDeviceCounts();
-            OnPropertyChanged(nameof(HasNoDevices));
-            OnPropertyChanged(nameof(EmptyStateText));
-        }
-    });
-
-    private void UpdateDeviceCounts()
-    {
-        TotalDeviceCount = Devices.Count;
-        HeartRateDeviceCount = Devices.Count(d => d.IsHeartRateCandidate);
     }
 
+    private void QueueDeviceUpdate(ulong address, DeviceSnapshot? update)
+    {
+        lock (_deviceUpdatesGate)
+        {
+            if (_disposed) return;
+            if (update is null && !_deliveredDeviceAddresses.Contains(address))
+            {
+                _pendingDeviceUpdates.Remove(address);
+                return;
+            }
+
+            bool startTimer = _deviceViewActive && _pendingDeviceUpdates.Count == 0;
+            _pendingDeviceUpdates[address] = update;
+            if (startTimer) _deviceUpdatesTimer.Start();
+        }
+    }
+
+    private void ApplyPendingDeviceUpdates(object? sender, EventArgs e)
+    {
+        lock (_deviceUpdatesGate)
+        {
+            _deviceUpdatesTimer.Stop();
+            if (_disposed || !_deviceViewActive || _pendingDeviceUpdates.Count == 0) return;
+
+            // Give producers an empty buffer while the dispatcher updates the view.
+            (_pendingDeviceUpdates, _deviceUpdatesToApply) = (_deviceUpdatesToApply, _pendingDeviceUpdates);
+            foreach (var (address, update) in _deviceUpdatesToApply)
+            {
+                if (update.HasValue) _deliveredDeviceAddresses.Add(address);
+                else _deliveredDeviceAddresses.Remove(address);
+            }
+        }
+
+        int heartRateCount = HeartRateDeviceCount;
+        foreach (var (address, update) in _deviceUpdatesToApply)
+        {
+            if (update is { } device)
+                heartRateCount += ApplyDeviceSnapshot(device);
+            else if (_devicesByAddress.Remove(address, out var removed))
+            {
+                _devices.Remove(removed);
+                if (removed.IsHeartRateCandidate) heartRateCount--;
+            }
+        }
+        _deviceUpdatesToApply.Clear();
+        TotalDeviceCount = _devices.Count;
+        HeartRateDeviceCount = heartRateCount;
+        UpdateEmptyState();
+    }
+
+    private int ApplyDeviceSnapshot(DeviceSnapshot snapshot)
+    {
+        bool wasCandidate = false;
+        if (_devicesByAddress.TryGetValue(snapshot.Address, out var device))
+        {
+            wasCandidate = device.IsHeartRateCandidate;
+            device.Rssi = snapshot.Rssi;
+            device.LastSeen = snapshot.LastSeen;
+            device.Name = snapshot.Name;
+            device.IsHeartRateCapable = snapshot.IsHeartRateCapable;
+            device.IsHeartRateBroadcasting = snapshot.IsHeartRateBroadcasting;
+            device.HasHeartRateService = snapshot.HasHeartRateService;
+        }
+        else
+        {
+            device = new DiscoveredDevice(snapshot.Address, snapshot.Name, snapshot.Rssi, snapshot.LastSeen,
+                snapshot.IsHeartRateCapable, snapshot.IsHeartRateBroadcasting, snapshot.HasHeartRateService);
+            _devicesByAddress.Add(snapshot.Address, device);
+            _devices.Add(device);
+        }
+
+        if (_settings.SelectedDeviceAddress == snapshot.Address && SelectedDevice != device)
+            SelectedDevice = device;
+
+        return (device.IsHeartRateCandidate ? 1 : 0) - (wasCandidate ? 1 : 0);
+    }
+
+    private void OnStateChanged(object? sender, HeartRateDisplayState value) => _dispatcher.BeginInvoke(() =>
+    {
+        CurrentBpm = value.BeatsPerMinute?.ToString() ?? "--";
+        Status = value.Message;
+        StatusKind = value.Kind;
+    });
+
     private void OnBluetoothStatusChanged(object? sender, BluetoothScanState state) =>
-        System.Windows.Application.Current.Dispatcher.BeginInvoke(() => ApplyScanState(state));
+        _dispatcher.BeginInvoke(() => ApplyScanState(state));
 
     private void OnGattDisconnected(object? sender, ulong address) =>
-        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+        _dispatcher.BeginInvoke(() =>
         {
             if (SelectedDevice?.Address == address)
             {
@@ -317,7 +418,20 @@ public partial class MainWindowViewModel : ObservableObject
 
     [RelayCommand] private void ToggleScan() { if (_bluetooth.CurrentState.IsScanning) _bluetooth.Stop(); else _bluetooth.Start(); }
     [RelayCommand(CanExecute = nameof(IsConnecting))] private void CancelConnect() => _gattClient.CancelConnect();
-    [RelayCommand] private void ShowOverlay() => _overlay.Show();
+    [RelayCommand]
+    private void ShowOverlay()
+    {
+        _overlay.Show();
+        RefreshOverlayControls();
+    }
+
+    public void RefreshOverlayControls()
+    {
+        _dispatcher.VerifyAccess();
+        IsOverlayLocked = _overlay.IsLocked;
+        IsOverlayBackgroundHidden = _overlay.IsBackgroundHidden;
+        IsOverlayClickThrough = _overlay.IsClickThrough;
+    }
 
     private async Task SaveSettingsSafelyAsync()
     {
@@ -336,7 +450,7 @@ public partial class MainWindowViewModel : ObservableObject
     {
         IsOverlayLocked = !IsOverlayLocked;
         _overlay.SetLocked(IsOverlayLocked);
-        await _settingsStore.SaveAsync(_settings);
+        await SaveSettingsSafelyAsync();
     }
 
     [RelayCommand]
@@ -344,7 +458,7 @@ public partial class MainWindowViewModel : ObservableObject
     {
         IsOverlayBackgroundHidden = !IsOverlayBackgroundHidden;
         _overlay.SetBackgroundHidden(IsOverlayBackgroundHidden);
-        await _settingsStore.SaveAsync(_settings);
+        await SaveSettingsSafelyAsync();
     }
 
     [RelayCommand]
@@ -353,6 +467,27 @@ public partial class MainWindowViewModel : ObservableObject
         IsOverlayClickThrough = !IsOverlayClickThrough;
         _overlay.SetClickThrough(IsOverlayClickThrough);
         IsOverlayClickThrough = _overlay.IsClickThrough;
-        await _settingsStore.SaveAsync(_settings);
+        await SaveSettingsSafelyAsync();
+    }
+
+    public void Dispose()
+    {
+        lock (_deviceUpdatesGate)
+        {
+            _disposed = true;
+            _deviceUpdatesTimer.Stop();
+            _pendingDeviceUpdates.Clear();
+            _deliveredDeviceAddresses.Clear();
+        }
+
+        _saveDebounceTimer.Stop();
+        _state.DeviceChanged -= OnDeviceChanged;
+        _state.DeviceRemoved -= OnDeviceRemoved;
+        _state.StateChanged -= OnStateChanged;
+        _bluetooth.StatusChanged -= OnBluetoothStatusChanged;
+        _gattClient.Disconnected -= OnGattDisconnected;
+        Overlay.PropertyChanged -= OnOverlayPropertyChanged;
+        _overlay.PlacementChanged -= OnOverlayPlacementChanged;
+        ((INotifyPropertyChanged)FilteredDevices).PropertyChanged -= OnFilteredDevicesPropertyChanged;
     }
 }

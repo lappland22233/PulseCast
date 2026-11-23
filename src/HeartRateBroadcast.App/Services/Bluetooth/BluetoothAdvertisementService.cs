@@ -78,16 +78,28 @@ public sealed class BluetoothAdvertisementService : IBluetoothAdvertisementServi
 
     private void OnReceived(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementReceivedEventArgs args)
     {
-        var sections = args.Advertisement.DataSections.Select(s => new BluetoothDataSection(s.DataType, s.Data.ToArray())).ToArray();
-        var manufacturer = args.Advertisement.ManufacturerData.FirstOrDefault();
-        string deviceName = BluetoothNameDecoder.Decode(sections, args.Advertisement.LocalName);
+        var handler = PacketReceived;
+        if (handler is null) return;
 
-        PacketReceived?.Invoke(this, new BluetoothPacket(
+        var advertisement = args.Advertisement;
+        var dataSections = advertisement.DataSections;
+        int sectionCount = dataSections.Count;
+        var sections = sectionCount == 0 ? [] : new BluetoothDataSection[sectionCount];
+        for (int index = 0; index < sectionCount; index++)
+        {
+            var section = dataSections[index];
+            sections[index] = new BluetoothDataSection(section.DataType, section.Data.ToArray());
+        }
+
+        var manufacturer = advertisement.ManufacturerData.FirstOrDefault();
+        string deviceName = BluetoothNameDecoder.Decode(sections, advertisement.LocalName);
+
+        handler(this, new BluetoothPacket(
             args.BluetoothAddress,
             deviceName,
             args.RawSignalStrengthInDBm,
             args.Timestamp,
-            args.Advertisement.ServiceUuids.ToArray(),
+            advertisement.ServiceUuids.ToArray(),
             sections,
             manufacturer?.CompanyId,
             manufacturer is null ? [] : manufacturer.Data.ToArray()));

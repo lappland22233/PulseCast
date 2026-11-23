@@ -19,7 +19,7 @@ public sealed class AdvertisementDiagnosticBuffer
         _enabled = settings.DiagnosticMode;
         _capacity = Math.Clamp(capacity, 1, 500);
         _minimumInterval = minimumInterval ?? TimeSpan.FromSeconds(1);
-        _items = new Queue<AdvertisementDiagnostic>(_capacity);
+        _items = new Queue<AdvertisementDiagnostic>(_enabled ? _capacity : 0);
     }
 
     public IReadOnlyList<AdvertisementDiagnostic> Snapshot()

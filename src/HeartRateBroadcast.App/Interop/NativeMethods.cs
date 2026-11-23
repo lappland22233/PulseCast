@@ -20,7 +20,8 @@ internal static partial class NativeMethods
     public const int WmDpiChanged = 0x02E0;
     public const uint MonitorDefaultToNearest = 2;
     public const int DwmwaUseImmersiveDarkMode = 20;
-    public const int DwmwaWindowCornerPreference = 33;
+    public const int DwmwaCaptionColor = 35;
+    public const int DwmwaTextColor = 36;
 
     public const int SrcCopy = 0x00CC0020;
     public const uint BiRgb = 0;

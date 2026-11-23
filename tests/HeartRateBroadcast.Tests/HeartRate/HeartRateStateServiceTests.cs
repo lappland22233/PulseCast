@@ -82,28 +82,44 @@ public sealed class HeartRateStateServiceTests : IDisposable
     }
 
     [Fact]
-    public void DeviceChanged_UpdatesSameInstanceInPlace()
+    public void DeviceChanged_ReportsImmutableSnapshotsAndKeepsKnownDeviceDetails()
     {
         var settings = new AppSettings();
         using var service = new HeartRateStateService(_bluetooth, _pipeline, _diagnostics, _gatt, settings);
 
-        DiscoveredDevice? firstSeen = null;
-        DiscoveredDevice? secondSeen = null;
-
-        service.DeviceChanged += (_, d) =>
-        {
-            if (firstSeen is null) firstSeen = d;
-            else secondSeen = d;
-        };
+        var snapshots = new List<DeviceSnapshot>();
+        service.DeviceChanged += (_, snapshot) => snapshots.Add(snapshot);
 
         var now = DateTimeOffset.UtcNow;
-        _bluetooth.FirePacket(new BluetoothPacket(0x1234567890AB, "HRM-A", -70, now, [], [], null, []));
-        _bluetooth.FirePacket(new BluetoothPacket(0x1234567890AB, "HRM-A", -55, now.AddSeconds(1), [], [], null, []));
+        var heartRateService = new Guid("0000180d-0000-1000-8000-00805f9b34fb");
+        _bluetooth.FirePacket(new BluetoothPacket(0x1234567890AB, "HRM-A", -70, now, [heartRateService], [], null, []));
+        _bluetooth.FirePacket(new BluetoothPacket(0x1234567890AB, "未知设备", -55, now.AddSeconds(1), [], [], null, []));
 
-        Assert.NotNull(firstSeen);
-        Assert.NotNull(secondSeen);
-        Assert.Same(firstSeen, secondSeen);
-        Assert.Equal((short)-55, firstSeen.Rssi);
+        Assert.Collection(snapshots,
+            first => Assert.Equal(new DeviceSnapshot(0x1234567890AB, "HRM-A", -70, now, true, false, true), first),
+            second => Assert.Equal(new DeviceSnapshot(0x1234567890AB, "HRM-A", -55, now.AddSeconds(1), true, false, true), second));
+    }
+
+    [Fact]
+    public void CapacityOverflow_EvictsOldestUnselectedGenericDeviceBeforeHeartRateCandidates()
+    {
+        using var service = new HeartRateStateService(_bluetooth, _pipeline, _diagnostics, _gatt, new AppSettings());
+        service.SelectedAddress = 1;
+
+        var now = DateTimeOffset.UtcNow;
+        _bluetooth.FirePacket(new BluetoothPacket(1, "Selected", -70, now, [], [], null, []));
+        _bluetooth.FirePacket(new BluetoothPacket(2, "HRM-A", -70, now.AddSeconds(1), [], [], null, []));
+        for (ulong address = 3; address <= 200; address++)
+        {
+            _bluetooth.FirePacket(new BluetoothPacket(address, "Speaker", -70, now.AddSeconds((double)address), [], [], null, []));
+        }
+
+        var events = new List<(ulong Address, bool Removed)>();
+        service.DeviceChanged += (_, snapshot) => events.Add((snapshot.Address, false));
+        service.DeviceRemoved += (_, address) => events.Add((address, true));
+        _bluetooth.FirePacket(new BluetoothPacket(201, "Speaker", -70, now.AddSeconds(201), [], [], null, []));
+
+        Assert.Equal(new (ulong, bool)[] { (201, false), (3, true) }, events);
     }
 
     public void Dispose()

@@ -8,7 +8,7 @@ namespace HeartRateBroadcast.App.Services.HeartRate;
 public interface IHeartRateStateService : IDisposable
 {
     event EventHandler<HeartRateDisplayState>? StateChanged;
-    event EventHandler<DiscoveredDevice>? DeviceChanged;
+    event EventHandler<DeviceSnapshot>? DeviceChanged;
     event EventHandler<ulong>? DeviceRemoved;
     HeartRateDisplayState Current { get; }
     ulong? SelectedAddress { get; set; }
@@ -18,13 +18,14 @@ public interface IHeartRateStateService : IDisposable
 public sealed class HeartRateStateService : IHeartRateStateService
 {
     private const int MaximumDevices = 200;
+    private static readonly Guid HeartRateServiceUuid = new("0000180d-0000-1000-8000-00805f9b34fb");
     private readonly IBluetoothAdvertisementService _bluetooth;
     private readonly HeartRateParserPipeline _pipeline;
     private readonly AdvertisementDiagnosticBuffer _diagnostics;
     private readonly IHeartRateGattClient _gattClient;
     private readonly System.Threading.Timer _timer;
     private readonly object _gate = new();
-    private readonly Dictionary<ulong, DiscoveredDevice> _devices = [];
+    private readonly Dictionary<ulong, DeviceSnapshot> _devices = [];
     private readonly TimeSpan _timeout;
     private readonly TimeSpan _deviceLifetime;
     private readonly int _minimumBpm;
@@ -35,7 +36,7 @@ public sealed class HeartRateStateService : IHeartRateStateService
     private bool _disposed;
 
     public event EventHandler<HeartRateDisplayState>? StateChanged;
-    public event EventHandler<DiscoveredDevice>? DeviceChanged;
+    public event EventHandler<DeviceSnapshot>? DeviceChanged;
     public event EventHandler<ulong>? DeviceRemoved;
 
     public HeartRateDisplayState Current
@@ -96,56 +97,51 @@ public sealed class HeartRateStateService : IHeartRateStateService
     {
         _diagnostics.Add(packet);
         var parsed = _pipeline.Parse(packet);
-        DiscoveredDevice snapshot;
-        List<ulong>? removed = null;
 
         lock (_gate)
         {
-            bool broadcasting = parsed.Sample is not null;
-            bool hasGattService = packet.ServiceUuids.Contains(Windows.Devices.Bluetooth.GenericAttributeProfile.GattServiceUuids.HeartRate);
-            bool isCandidate = broadcasting || hasGattService || HeartRateDeviceClassifier.MatchesHeartRateName(packet.Name);
+            if (_disposed) return;
 
-            if (_devices.TryGetValue(packet.Address, out var existing))
-            {
-                existing.Update(
-                    packet.Rssi,
-                    packet.ReceivedAt,
-                    packet.Name,
-                    capable: isCandidate || existing.IsHeartRateCapable,
-                    broadcasting: broadcasting || existing.IsHeartRateBroadcasting,
-                    hasGattService: hasGattService || existing.HasHeartRateService);
-                snapshot = existing;
-            }
-            else
-            {
-                snapshot = new DiscoveredDevice(
-                    packet.Address,
-                    packet.Name,
-                    packet.Rssi,
-                    packet.ReceivedAt,
-                    isHeartRateCapable: isCandidate,
-                    isHeartRateBroadcasting: broadcasting,
-                    hasHeartRateService: hasGattService);
-                _devices[packet.Address] = snapshot;
-            }
+            bool knownDevice = _devices.TryGetValue(packet.Address, out var previous);
+            string name = packet.Name;
+            if (knownDevice && (string.IsNullOrWhiteSpace(name) || name == "未知设备" || name == previous.Name))
+                name = previous.Name;
 
-            if (_devices.Count > MaximumDevices)
+            bool broadcasting = previous.IsHeartRateBroadcasting || parsed.Sample is not null;
+            bool hasGattService = previous.HasHeartRateService || packet.ServiceUuids.Contains(HeartRateServiceUuid);
+            bool capable = previous.IsHeartRateCapable || broadcasting || hasGattService ||
+                ((!knownDevice || name != previous.Name) && HeartRateDeviceClassifier.MatchesHeartRateName(name));
+            var snapshot = new DeviceSnapshot(packet.Address, name, packet.Rssi, packet.ReceivedAt, capable, broadcasting, hasGattService);
+            _devices[packet.Address] = snapshot;
+
+            ulong? removed = _devices.Count > MaximumDevices ? RemoveOverflowDevice() : null;
+
+            // Publish changes and removals in mutation order, including expiry on the timer thread.
+            DeviceChanged?.Invoke(this, snapshot);
+            if (removed is not null) DeviceRemoved?.Invoke(this, removed.Value);
+        }
+
+        if (parsed.Sample is not null) AcceptGattSample(parsed.Sample);
+    }
+
+    private ulong? RemoveOverflowDevice()
+    {
+        DeviceSnapshot? leastRelevant = null;
+        foreach (var device in _devices.Values)
+        {
+            if (device.Address == _selectedAddress) continue;
+            if (leastRelevant is not { } current ||
+                (device.IsHeartRateCandidate == current.IsHeartRateCandidate
+                    ? device.LastSeen < current.LastSeen
+                    : !device.IsHeartRateCandidate))
             {
-                removed = _devices.Values
-                    .Where(device => device.Address != _selectedAddress)
-                    .OrderBy(device => device.IsHeartRateCandidate ? 1 : 0)
-                    .ThenBy(device => device.LastSeen)
-                    .Take(_devices.Count - MaximumDevices)
-                    .Select(device => device.Address)
-                    .ToList();
-                foreach (var address in removed) _devices.Remove(address);
+                leastRelevant = device;
             }
         }
 
-        DeviceChanged?.Invoke(this, snapshot);
-        if (removed is not null)
-            foreach (var address in removed) DeviceRemoved?.Invoke(this, address);
-        if (parsed.Sample is not null) AcceptGattSample(parsed.Sample);
+        if (leastRelevant is not { } removed) return null;
+        _devices.Remove(removed.Address);
+        return removed.Address;
     }
 
     private void OnGattSample(object? sender, HeartRateSample sample) => AcceptGattSample(sample);
@@ -182,7 +178,6 @@ public sealed class HeartRateStateService : IHeartRateStateService
     private void CheckTimeoutAndPruneDevices()
     {
         HeartRateDisplayState? staleState = null;
-        List<ulong>? removed = null;
         var now = DateTimeOffset.UtcNow;
 
         lock (_gate)
@@ -194,15 +189,21 @@ public sealed class HeartRateStateService : IHeartRateStateService
                 _current = staleState;
             }
 
-            removed = _devices.Values
-                .Where(device => device.Address != _selectedAddress && now - device.LastSeen > _deviceLifetime)
-                .Select(device => device.Address)
-                .ToList();
-            foreach (var address in removed) _devices.Remove(address);
+            List<ulong>? removed = null;
+            foreach (var device in _devices.Values)
+            {
+                if (device.Address != _selectedAddress && now - device.LastSeen > _deviceLifetime)
+                    (removed ??= []).Add(device.Address);
+            }
+
+            if (removed is not null)
+            {
+                foreach (var address in removed) _devices.Remove(address);
+                foreach (var address in removed) DeviceRemoved?.Invoke(this, address);
+            }
         }
 
         if (staleState is not null) StateChanged?.Invoke(this, staleState);
-        foreach (var address in removed) DeviceRemoved?.Invoke(this, address);
     }
 
     private void Publish(HeartRateDisplayState state)

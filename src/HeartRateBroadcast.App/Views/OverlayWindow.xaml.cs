@@ -1,8 +1,10 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using HeartRateBroadcast.App.Services.Overlay;
 using HeartRateBroadcast.App.ViewModels;
 
@@ -10,26 +12,37 @@ namespace HeartRateBroadcast.App.Views;
 
 public partial class OverlayWindow : Window
 {
-    // 自适应前景色：深底浅字 / 浅底深字
-    private static readonly Color LightFg = Color.FromRgb(0xF6, 0xF8, 0xFB);
-    private static readonly Color DarkFg = Color.FromRgb(0x16, 0x1A, 0x21);
-    private static readonly Color HeartOnDark = Color.FromRgb(0xFF, 0x4D, 0x6D);
-    private static readonly Color HeartOnLight = Color.FromRgb(0xD6, 0x3A, 0x58);
-    private static readonly Color LiveOnDark = Color.FromRgb(0x22, 0xC5, 0x5E);
-    private static readonly Color LiveOnLight = Color.FromRgb(0x15, 0x80, 0x3D);
+    private static readonly SolidColorBrush LightTextBrush = CreateBrush(Color.FromRgb(0xF6, 0xF8, 0xFB));
+    private static readonly SolidColorBrush DarkTextBrush = CreateBrush(Color.FromRgb(0x16, 0x1A, 0x21));
+    private static readonly SolidColorBrush LightMutedBrush = CreateBrush(Color.FromArgb(0xCC, 0xF6, 0xF8, 0xFB));
+    private static readonly SolidColorBrush DarkMutedBrush = CreateBrush(Color.FromArgb(0xC7, 0x16, 0x1A, 0x21));
+    private static readonly SolidColorBrush HeartOnDark = CreateBrush(Color.FromRgb(0xFF, 0x75, 0x72));
+    private static readonly SolidColorBrush HeartOnLight = CreateBrush(Color.FromRgb(0xBB, 0x32, 0x36));
+    private static readonly SolidColorBrush LiveOnDark = CreateBrush(Color.FromRgb(0x84, 0xD4, 0xAE));
+    private static readonly SolidColorBrush LiveOnLight = CreateBrush(Color.FromRgb(0x15, 0x72, 0x4A));
+    private static readonly TimeSpan ActiveSampleInterval = TimeSpan.FromMilliseconds(125);
+    private static readonly TimeSpan StableSampleInterval = TimeSpan.FromMilliseconds(500);
 
     private readonly OverlayViewModel _vm;
     private readonly IScreenLuminanceSampler _sampler;
     private readonly CharacterContrastService _characterContrast;
+    private readonly CancellationTokenSource _samplingLifetime = new();
+    private readonly DispatcherTimer _inversionTimer;
     private readonly List<Run> _characterRuns = [];
+    private readonly List<Int32Rect> _characterRegions = [];
     private bool[] _characterLightText = [];
-    private System.Windows.Threading.DispatcherTimer? _inversionTimer;
-    private Storyboard? _beat;
-    private bool? _appliedLightText;
-    private CancellationTokenSource? _sampleCts;
-    private bool _sampleInProgress;
-    private bool _needsResample;
+    private Run? _wholeTextRun;
+    private (bool LightText, bool Live)? _appliedTheme;
+    private AnimationClock? _beat;
+    private double? _animatedBpm;
+
+    private DispatcherOperation? _queuedSample;
+    private Int32Rect _captureRegion;
+    private byte[]? _capturePixels;
+    private int _sampleVersion;
+    private int _measuredVersion = -1;
     private int _stableSampleCount;
+    private bool _sampleInProgress;
     private bool _disposed;
 
     public bool IsPositionLocked { get; set; }
@@ -40,143 +53,197 @@ public partial class OverlayWindow : Window
         DataContext = _vm = viewModel;
         _sampler = sampler;
         _characterContrast = characterContrast;
+        _inversionTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+        {
+            Interval = ActiveSampleInterval,
+        };
+        _inversionTimer.Tick += OnInversionTick;
         Loaded += OnLoaded;
         Closed += OnClosed;
+        IsVisibleChanged += OnVisibilityChanged;
         LocationChanged += OnGeometryChanged;
         SizeChanged += OnGeometryChanged;
+        DpiChanged += OnGeometryChanged;
         _vm.PropertyChanged += OnVmPropertyChanged;
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private void OnLoaded(object sender, RoutedEventArgs e) => RefreshVisibleState();
+
+    private void RefreshVisibleState()
     {
+        if (!IsLoaded || !IsVisible) return;
+
+        _characterContrast.Reset();
         ApplyBackgroundMode();
-        ApplyTheme(force: true);
+        ApplyTheme();
+        RefreshBpmText();
         UpdateHeartBeat();
-        if (_inversionTimer is null)
-        {
-            _inversionTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(125) };
-            _inversionTimer.Tick += OnInversionTick;
-        }
-        _inversionTimer.Start();
-        ScheduleImmediateSample();
+        InvalidateSampling();
     }
 
-    private void OnGeometryChanged(object? sender, EventArgs e) => ScheduleImmediateSample();
-
-    private void ScheduleImmediateSample()
+    private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        _stableSampleCount = 0;
-        if (_inversionTimer is not null) _inversionTimer.Interval = TimeSpan.FromMilliseconds(125);
-        if (!IsLoaded || !ShouldUsePerCharacterInversion()) return;
-        _ = Dispatcher.InvokeAsync(SampleAndApplyAsync, System.Windows.Threading.DispatcherPriority.Render);
+        if (IsVisible)
+        {
+            RefreshVisibleState();
+            return;
+        }
+
+        UpdateHeartBeat();
+        InvalidateSampling();
     }
 
-    private bool ShouldUsePerCharacterInversion() =>
+    private void OnGeometryChanged(object? sender, EventArgs e)
+    {
+        if (CanSample) InvalidateSampling();
+    }
+
+    private bool CanSample => !_disposed && IsLoaded && IsVisible && UsesAutomaticInversion;
+
+    private bool UsesAutomaticInversion =>
         _vm.HideBackground && _vm.InversionMode == "自动" && _vm.ColorMode == "自动";
+
+    private void InvalidateSampling()
+    {
+        _sampleVersion++;
+        _stableSampleCount = 0;
+        if (!CanSample)
+        {
+            _inversionTimer.Stop();
+            _queuedSample?.Abort();
+            _queuedSample = null;
+            _capturePixels = null;
+            return;
+        }
+
+        _inversionTimer.Interval = ActiveSampleInterval;
+        _inversionTimer.Start();
+        QueueSample();
+    }
+
+    private void QueueSample()
+    {
+        if (_sampleInProgress || _queuedSample is not null) return;
+
+        // 等待本轮绑定和布局完成，再测量文字的屏幕坐标。
+        _queuedSample = Dispatcher.InvokeAsync(async () =>
+        {
+            _queuedSample = null;
+            await SampleAndApplyAsync();
+        }, DispatcherPriority.Background);
+    }
 
     private void OnVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
+        if (!IsLoaded || !IsVisible) return;
+
         switch (e.PropertyName)
         {
             case nameof(OverlayViewModel.Bpm):
                 _characterContrast.Reset();
-                RebuildBpmText();
-                ScheduleImmediateSample();
+                RefreshBpmText();
+                InvalidateSampling();
                 UpdateHeartBeat();
                 break;
             case nameof(OverlayViewModel.IsLightText):
+                ApplyTheme();
+                if (!UsesAutomaticInversion) RefreshBpmText();
+                break;
             case nameof(OverlayViewModel.ColorMode):
             case nameof(OverlayViewModel.SolidColor):
             case nameof(OverlayViewModel.GradientId):
             case nameof(OverlayViewModel.InversionMode):
                 _characterContrast.Reset();
-                ApplyTheme(force: true);
-                ScheduleImmediateSample();
-                break;
-            case nameof(OverlayViewModel.NumberFontFamily):
-            case nameof(OverlayViewModel.NumberFontSize):
-                ScheduleImmediateSample();
+                ApplyTheme();
+                RefreshBpmText();
+                InvalidateSampling();
                 break;
             case nameof(OverlayViewModel.HideBackground):
                 _characterContrast.Reset();
                 ApplyBackgroundMode();
-                ApplyTheme(force: true);
-                ScheduleImmediateSample();
+                ApplyTheme();
+                RefreshBpmText();
+                InvalidateSampling();
+                break;
+            case nameof(OverlayViewModel.IsLive):
+                ApplyTheme();
+                UpdateHeartBeat();
+                break;
+            case nameof(OverlayViewModel.ShowHeart):
+                UpdateHeartBeat();
+                InvalidateSampling();
+                break;
+            case nameof(OverlayViewModel.Status):
+            case nameof(OverlayViewModel.ShowUnit):
+            case nameof(OverlayViewModel.ShowLive):
+            case nameof(OverlayViewModel.Scale):
+            case nameof(OverlayViewModel.NumberFontFamily):
+                InvalidateSampling();
                 break;
         }
     }
 
     private async void OnInversionTick(object? sender, EventArgs e) => await SampleAndApplyAsync();
 
-    /// <summary>在后台单航班采样字符实际屏幕区域，并按字符增量更新前景色。</summary>
     private async Task SampleAndApplyAsync()
     {
-        if (_disposed || !IsVisible || !ShouldUsePerCharacterInversion()) return;
-        if (_sampleInProgress)
-        {
-            _needsResample = true;
-            _sampleCts?.Cancel();
-            return;
-        }
+        if (!CanSample || _sampleInProgress) return;
 
-        IReadOnlyList<Int32Rect> regions = GetCharacterScreenRegions();
-        Int32Rect union = CharacterContrastService.Union(regions);
-        if (union.IsEmpty) return;
+        int version = _sampleVersion;
+        if (_measuredVersion != version || _captureRegion.IsEmpty)
+        {
+            MeasureCharacterScreenRegions();
+            _measuredVersion = version;
+        }
+        if (_captureRegion.IsEmpty) return;
+
+        int byteCount = checked(_captureRegion.Width * _captureRegion.Height * 4);
+        if (_capturePixels is null || _capturePixels.Length < byteCount || _capturePixels.Length / 4 > byteCount)
+            _capturePixels = GC.AllocateUninitializedArray<byte>(byteCount);
 
         _sampleInProgress = true;
-        _needsResample = false;
-        _sampleCts?.Cancel();
-        _sampleCts?.Dispose();
-        _sampleCts = new CancellationTokenSource();
         try
         {
-            ScreenPixelBuffer? pixels = await _sampler.CaptureAsync(union, _sampleCts.Token);
-            if (pixels is null || _disposed) return;
-            IReadOnlyList<bool> decisions = _characterContrast.Analyze(pixels, regions, EffectiveLightText());
-            bool changed = decisions.Count != _characterLightText.Length || !decisions.SequenceEqual(_characterLightText);
-            if (changed)
+            ScreenPixelBuffer? pixels = await _sampler.CaptureIntoAsync(_captureRegion, _capturePixels, _samplingLifetime.Token);
+            if (pixels is null || version != _sampleVersion || !CanSample) return;
+
+            bool resized = _characterLightText.Length != _characterRegions.Count;
+            if (resized) Array.Resize(ref _characterLightText, _characterRegions.Count);
+            bool changed = _characterContrast.Analyze(pixels, _characterRegions, EffectiveLightText(), _characterLightText);
+            if (changed || resized)
             {
-                _characterLightText = decisions.ToArray();
                 ApplyCharacterColors();
-
-                // 同步非数字元素（爱心、单位、Live）的反色：按字符多数表决判定
-                if (decisions.Count > 0)
+                int lightCount = 0;
+                foreach (bool light in _characterLightText)
                 {
-                    int lightCount = decisions.Count(d => d);
-                    bool majorityLight = lightCount >= (decisions.Count - lightCount);
-                    if (_vm.IsLightText != majorityLight)
-                    {
-                        _vm.IsLightText = majorityLight;
-                    }
-                    ApplyTheme(force: true);
+                    if (light) lightCount++;
                 }
-
+                _vm.IsLightText = lightCount >= _characterLightText.Length - lightCount;
                 _stableSampleCount = 0;
             }
-            else
+            else if (_stableSampleCount < 16)
             {
                 _stableSampleCount++;
             }
-            if (_inversionTimer is not null)
-                _inversionTimer.Interval = TimeSpan.FromMilliseconds(_stableSampleCount >= 16 ? 500 : 125);
+
+            TimeSpan interval = _stableSampleCount >= 16 ? StableSampleInterval : ActiveSampleInterval;
+            if (_inversionTimer.Interval != interval) _inversionTimer.Interval = interval;
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) when (_disposed)
+        {
+        }
         finally
         {
             _sampleInProgress = false;
-            if (_needsResample && !_disposed && IsVisible && ShouldUsePerCharacterInversion())
-            {
-                _needsResample = false;
-                _ = Dispatcher.InvokeAsync(SampleAndApplyAsync, System.Windows.Threading.DispatcherPriority.Render);
-            }
+            if (version != _sampleVersion && CanSample) QueueSample();
         }
     }
 
-    private List<Int32Rect> GetCharacterScreenRegions()
+    private void MeasureCharacterScreenRegions()
     {
-        var result = new List<Int32Rect>(_characterRuns.Count);
-        if (!IsVisible || PresentationSource.FromVisual(BpmText) is null)
-            return result;
+        _characterRegions.Clear();
+        _captureRegion = Int32Rect.Empty;
+        if (PresentationSource.FromVisual(BpmText) is null) return;
 
         foreach (Run run in _characterRuns)
         {
@@ -184,122 +251,149 @@ public partial class OverlayWindow : Window
             {
                 Rect start = run.ContentStart.GetCharacterRect(LogicalDirection.Forward);
                 Rect end = run.ContentEnd.GetCharacterRect(LogicalDirection.Backward);
+                if (start.IsEmpty || end.IsEmpty)
+                {
+                    _characterRegions.Add(Int32Rect.Empty);
+                    continue;
+                }
+
                 Point topLeft = BpmText.PointToScreen(new Point(Math.Min(start.Left, end.Left), Math.Min(start.Top, end.Top)));
                 Point bottomRight = BpmText.PointToScreen(new Point(Math.Max(start.Right, end.Right), Math.Max(start.Bottom, end.Bottom)));
                 int left = (int)Math.Floor(Math.Min(topLeft.X, bottomRight.X));
                 int top = (int)Math.Floor(Math.Min(topLeft.Y, bottomRight.Y));
                 int right = (int)Math.Ceiling(Math.Max(topLeft.X, bottomRight.X));
                 int bottom = (int)Math.Ceiling(Math.Max(topLeft.Y, bottomRight.Y));
-                result.Add(right > left && bottom > top ? new Int32Rect(left, top, right - left, bottom - top) : Int32Rect.Empty);
+                _characterRegions.Add(right > left && bottom > top ? new Int32Rect(left, top, right - left, bottom - top) : Int32Rect.Empty);
             }
             catch (InvalidOperationException)
             {
-                result.Add(Int32Rect.Empty);
+                _characterRegions.Add(Int32Rect.Empty);
             }
         }
-        return result;
+
+        _captureRegion = CharacterContrastService.Union(_characterRegions);
     }
 
-    private void ApplyCharacterColors()
-    {
-        for (int i = 0; i < _characterRuns.Count; i++)
-        {
-            bool light = i < _characterLightText.Length ? _characterLightText[i] : EffectiveLightText();
-            Color color = light ? LightFg : DarkFg;
-            if (_characterRuns[i].Foreground is SolidColorBrush brush && brush.Color == color) continue;
-            var replacement = new SolidColorBrush(color);
-            replacement.Freeze();
-            _characterRuns[i].Foreground = replacement;
-        }
-    }
-
-    /// <summary>根据反色判定与颜色模式设置前景色。</summary>
-    private void ApplyTheme(bool force = false)
+    private void ApplyTheme()
     {
         bool lightText = EffectiveLightText();
-        if (!force && _appliedLightText == lightText) return;
+        bool live = _vm.IsLive;
+        if (_appliedTheme == (lightText, live)) return;
 
-        _appliedLightText = lightText;
-        Color dim = lightText ? Color.FromArgb(0xCC, 0xF6, 0xF8, 0xFB) : Color.FromArgb(0xC7, 0x16, 0x1A, 0x21);
-        HeartIcon.Fill = new SolidColorBrush(lightText ? HeartOnDark : HeartOnLight);
-        LiveDot.Fill = new SolidColorBrush(lightText ? LiveOnDark : LiveOnLight);
-        LiveText.Foreground = new SolidColorBrush(lightText ? LiveOnDark : LiveOnLight);
-        UnitText.Foreground = new SolidColorBrush(dim);
-        RebuildBpmText();
+        _appliedTheme = (lightText, live);
+        SolidColorBrush muted = lightText ? LightMutedBrush : DarkMutedBrush;
+        SolidColorBrush status = live ? (lightText ? LiveOnDark : LiveOnLight) : muted;
+        HeartIcon.Fill = lightText ? HeartOnDark : HeartOnLight;
+        LiveDot.Fill = status;
+        LiveText.Foreground = status;
+        UnitText.Foreground = muted;
     }
 
-    private bool EffectiveLightText()
+    private bool EffectiveLightText() => !_vm.HideBackground || (_vm.InversionMode switch
     {
-        bool lightText = _vm.InversionMode switch
-        {
-            "强制浅字" => true,
-            "强制深字" => false,
-            _ => _vm.IsLightText,
-        };
-        // 带背景卡片时自身提供对比，恒浅字
-        if (!_vm.HideBackground) lightText = true;
-        return lightText;
-    }
+        "强制浅字" => true,
+        "强制深字" => false,
+        _ => _vm.IsLightText,
+    });
 
-    /// <summary>按颜色模式重建 BPM 文本；自动逐字模式保留字符与实际布局的一一映射。</summary>
-    private void RebuildBpmText()
+    private void RefreshBpmText()
     {
         string text = _vm.Bpm;
-        bool perCharacter = ShouldUsePerCharacterInversion() || _vm.ColorMode == "逐字渐变";
-        if (!perCharacter && BpmText.Inlines.Count == 1 && BpmText.Inlines.FirstInline is Run existing && existing.Text == text)
+        bool gradient = _vm.ColorMode == "逐字渐变";
+        if (!UsesAutomaticInversion && !gradient)
         {
-            existing.Foreground = new SolidColorBrush(GetBpmColor());
-            _characterRuns.Clear();
+            if (_wholeTextRun is null)
+            {
+                BpmText.Inlines.Clear();
+                _characterRuns.Clear();
+                _wholeTextRun = new Run();
+                BpmText.Inlines.Add(_wholeTextRun);
+            }
+
+            if (_wholeTextRun.Text != text) _wholeTextRun.Text = text;
+            if (_vm.ColorMode == "单色" && TryParseColor(_vm.SolidColor, out Color solid))
+                ApplyColor(_wholeTextRun, solid);
+            else
+                ApplyBrush(_wholeTextRun, EffectiveLightText() ? LightTextBrush : DarkTextBrush);
             return;
         }
 
-        BpmText.Inlines.Clear();
-        _characterRuns.Clear();
-        char[] chars = text.ToCharArray();
-
-        if (perCharacter)
+        if (_wholeTextRun is not null)
         {
-            for (int i = 0; i < chars.Length; i++)
+            BpmText.Inlines.Clear();
+            _wholeTextRun = null;
+        }
+
+        while (_characterRuns.Count > text.Length)
+        {
+            BpmText.Inlines.Remove(_characterRuns[^1]);
+            _characterRuns.RemoveAt(_characterRuns.Count - 1);
+        }
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (i == _characterRuns.Count)
             {
-                Color color;
-                if (_vm.ColorMode == "逐字渐变")
-                {
-                    GetGradientColors(out Color from, out Color to);
-                    double t = chars.Length > 1 ? (double)i / (chars.Length - 1) : 0;
-                    color = Lerp(from, to, t);
-                }
-                else
-                {
-                    bool light = i < _characterLightText.Length ? _characterLightText[i] : EffectiveLightText();
-                    color = light ? LightFg : DarkFg;
-                }
-                var run = new Run(chars[i].ToString()) { Foreground = new SolidColorBrush(color) };
+                var run = new Run(text[i].ToString());
                 _characterRuns.Add(run);
                 BpmText.Inlines.Add(run);
+            }
+            else if (_characterRuns[i].Text[0] != text[i])
+            {
+                _characterRuns[i].Text = text[i].ToString();
+            }
+        }
+
+        if (gradient)
+        {
+            (Color from, Color to) = GetGradientColors();
+            for (int i = 0; i < _characterRuns.Count; i++)
+            {
+                double t = text.Length > 1 ? (double)i / (text.Length - 1) : 0;
+                ApplyColor(_characterRuns[i], Lerp(from, to, t));
             }
         }
         else
         {
-            BpmText.Inlines.Add(new Run(text) { Foreground = new SolidColorBrush(GetBpmColor()) });
+            ApplyCharacterColors();
         }
     }
 
-    private Color GetBpmColor()
+    private void ApplyCharacterColors()
     {
-        if (_vm.ColorMode == "单色" && TryParseColor(_vm.SolidColor, out Color solid)) return solid;
-        return EffectiveLightText() ? LightFg : DarkFg;
+        bool fallback = EffectiveLightText();
+        for (int i = 0; i < _characterRuns.Count; i++)
+        {
+            bool light = i < _characterLightText.Length ? _characterLightText[i] : fallback;
+            ApplyBrush(_characterRuns[i], light ? LightTextBrush : DarkTextBrush);
+        }
     }
 
-    private void GetGradientColors(out Color from, out Color to)
+    private static void ApplyBrush(Run run, SolidColorBrush brush)
     {
-        (from, to) = _vm.GradientId switch
-        {
-            "冰蓝" => (Color.FromRgb(0x36, 0xD1, 0xDC), Color.FromRgb(0x5B, 0x86, 0xE5)),
-            "翠绿" => (Color.FromRgb(0x11, 0x99, 0x8E), Color.FromRgb(0x38, 0xEF, 0x7D)),
-            "金橙" => (Color.FromRgb(0xF7, 0x97, 0x1E), Color.FromRgb(0xFF, 0xD2, 0x00)),
-            _ => (Color.FromRgb(0xFF, 0x4D, 0x6D), Color.FromRgb(0xFF, 0xB1, 0x99)), // 红粉
-        };
+        if (run.Foreground != brush) run.Foreground = brush;
     }
+
+    private static void ApplyColor(Run run, Color color)
+    {
+        if (run.Foreground is not SolidColorBrush brush || brush.Color != color)
+            run.Foreground = CreateBrush(color);
+    }
+
+    private static SolidColorBrush CreateBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private (Color From, Color To) GetGradientColors() => _vm.GradientId switch
+    {
+        "冰蓝" => (Color.FromRgb(0x36, 0xD1, 0xDC), Color.FromRgb(0x5B, 0x86, 0xE5)),
+        "翠绿" => (Color.FromRgb(0x11, 0x99, 0x8E), Color.FromRgb(0x38, 0xEF, 0x7D)),
+        "金橙" => (Color.FromRgb(0xF7, 0x97, 0x1E), Color.FromRgb(0xFF, 0xD2, 0x00)),
+        _ => (Color.FromRgb(0xFF, 0x4D, 0x6D), Color.FromRgb(0xFF, 0xB1, 0x99)),
+    };
 
     private static Color Lerp(Color a, Color b, double t) => Color.FromRgb(
         (byte)(a.R + (b.R - a.R) * t),
@@ -324,7 +418,6 @@ public partial class OverlayWindow : Window
         }
     }
 
-    /// <summary>背景模式：透明（依赖反色）或深色卡片（自带对比）。</summary>
     public void SetBackgroundHidden(bool hidden) => _vm.HideBackground = hidden;
 
     private void ApplyBackgroundMode()
@@ -336,27 +429,43 @@ public partial class OverlayWindow : Window
         }
         else
         {
-            OverlayBackground.Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x15, 0x18, 0x21));
-            OverlayBackground.BorderBrush = new SolidColorBrush(Color.FromArgb(0x50, 0xFF, 0xFF, 0xFF));
+            OverlayBackground.SetResourceReference(Border.BackgroundProperty, "OverlayPanelBrush");
+            OverlayBackground.SetResourceReference(Border.BorderBrushProperty, "OverlayBorderBrush");
         }
     }
 
-    /// <summary>心跳动画，时长随 BPM 同步。</summary>
     private void UpdateHeartBeat()
     {
-        _beat?.Remove(this);
-        if (!SystemParameters.ClientAreaAnimation || !double.TryParse(_vm.Bpm, out double bpm) || bpm <= 0) return;
-        double pulse = Math.Clamp(60.0 / bpm * 0.35, 0.08, 0.5);
-        var ax = new DoubleAnimation(1, 1.22, new Duration(TimeSpan.FromSeconds(pulse))) { AutoReverse = true };
-        var ay = new DoubleAnimation(1, 1.22, new Duration(TimeSpan.FromSeconds(pulse))) { AutoReverse = true };
-        Storyboard.SetTarget(ax, HeartScale);
-        Storyboard.SetTargetProperty(ax, new PropertyPath(ScaleTransform.ScaleXProperty));
-        Storyboard.SetTarget(ay, HeartScale);
-        Storyboard.SetTargetProperty(ay, new PropertyPath(ScaleTransform.ScaleYProperty));
-        _beat = new Storyboard { RepeatBehavior = RepeatBehavior.Forever };
-        _beat.Children.Add(ax);
-        _beat.Children.Add(ay);
-        _beat.Begin(this);
+        if (_disposed || !IsLoaded || !IsVisible || !_vm.IsLive || !_vm.ShowHeart || !SystemParameters.ClientAreaAnimation ||
+            !double.TryParse(_vm.Bpm, out double bpm) || bpm <= 0)
+        {
+            if (_beat is null) return;
+            _beat.Controller?.Remove();
+            HeartScale.ApplyAnimationClock(ScaleTransform.ScaleXProperty, null);
+            HeartScale.ApplyAnimationClock(ScaleTransform.ScaleYProperty, null);
+            _beat = null;
+            _animatedBpm = null;
+            return;
+        }
+
+        if (_animatedBpm == bpm) return;
+
+        double beatSeconds = 60 / bpm;
+        double pulseSeconds = Math.Clamp(beatSeconds * 0.18, 0.05, 0.16);
+        var animation = new DoubleAnimationUsingKeyFrames
+        {
+            Duration = TimeSpan.FromSeconds(beatSeconds),
+            RepeatBehavior = RepeatBehavior.Forever,
+        };
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(1.18, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(pulseSeconds))));
+        animation.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromSeconds(pulseSeconds * 2))));
+        Timeline.SetDesiredFrameRate(animation, 24);
+        _beat?.Controller?.Remove();
+        _beat = animation.CreateClock();
+        HeartScale.ApplyAnimationClock(ScaleTransform.ScaleXProperty, _beat);
+        HeartScale.ApplyAnimationClock(ScaleTransform.ScaleYProperty, _beat);
+        _animatedBpm = bpm;
     }
 
     private void OnDrag(object sender, MouseButtonEventArgs e)
@@ -370,18 +479,15 @@ public partial class OverlayWindow : Window
         _disposed = true;
         Loaded -= OnLoaded;
         Closed -= OnClosed;
+        IsVisibleChanged -= OnVisibilityChanged;
         LocationChanged -= OnGeometryChanged;
         SizeChanged -= OnGeometryChanged;
+        DpiChanged -= OnGeometryChanged;
         _vm.PropertyChanged -= OnVmPropertyChanged;
-        if (_inversionTimer is not null)
-        {
-            _inversionTimer.Stop();
-            _inversionTimer.Tick -= OnInversionTick;
-        }
-        _sampleCts?.Cancel();
-        _sampleCts?.Dispose();
-        _sampleCts = null;
-        _beat?.Remove(this);
-        _beat = null;
+        InvalidateSampling();
+        _inversionTimer.Tick -= OnInversionTick;
+        _samplingLifetime.Cancel();
+        _samplingLifetime.Dispose();
+        UpdateHeartBeat();
     }
 }

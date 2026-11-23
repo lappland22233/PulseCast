@@ -159,15 +159,26 @@ public static class BluetoothNameDecoder
 
     private static string CleanString(string text)
     {
-        // 过滤不可见控制符，保留常规字符
-        var sb = new StringBuilder(text.Length);
-        foreach (char c in text)
+        ReadOnlySpan<char> trimmed = text.AsSpan().Trim();
+        if (trimmed.IsEmpty) return "未知设备";
+
+        for (int index = 0; index < trimmed.Length; index++)
         {
-            if (!char.IsControl(c) || c is '\t' or ' ')
-                sb.Append(c);
+            if (!char.IsControl(trimmed[index]) || trimmed[index] == '\t') continue;
+
+            var cleaned = new StringBuilder(trimmed.Length);
+            cleaned.Append(trimmed[..index]);
+            foreach (char character in trimmed[(index + 1)..])
+            {
+                if (!char.IsControl(character) || character == '\t')
+                    cleaned.Append(character);
+            }
+
+            string result = cleaned.ToString().Trim();
+            return result.Length == 0 ? "未知设备" : result;
         }
-        string result = sb.ToString().Trim();
-        return string.IsNullOrWhiteSpace(result) ? "未知设备" : result;
+
+        return trimmed.Length == text.Length ? text : trimmed.ToString();
     }
 }
 

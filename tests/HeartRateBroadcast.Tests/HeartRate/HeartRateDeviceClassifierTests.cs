@@ -61,6 +61,24 @@ public class HeartRateDeviceClassifierTests
         Assert.False(device.IsHeartRateCandidate);
     }
 
+    [Fact]
+    public void DiscoveredDevice_OnlyNotifiesDerivedPropertiesWhenTheirInputsChange()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var device = new DiscoveredDevice(0x112233445566, "AirPods", -80, now, isHeartRateCapable: false);
+        var properties = new List<string?>();
+        device.PropertyChanged += (_, args) => properties.Add(args.PropertyName);
+
+        device.LastSeen = now.AddSeconds(1);
+        Assert.Equal(nameof(DiscoveredDevice.LastSeen), Assert.Single(properties));
+
+        properties.Clear();
+        device.Name = "Polar H10";
+        Assert.True(device.IsHeartRateCandidate);
+        Assert.Contains(nameof(DiscoveredDevice.CategoryBadgeText), properties);
+        Assert.DoesNotContain(nameof(DiscoveredDevice.SignalBars), properties);
+    }
+
     [Theory]
     [InlineData(-50, 4)]
     [InlineData(-68, 3)]
