@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Windows;
 
 namespace HeartRateBroadcast.App.Services.Overlay;
@@ -6,15 +7,27 @@ namespace HeartRateBroadcast.App.Services.Overlay;
 public sealed class CharacterContrastService
 {
     private const double SwitchAdvantage = 1.15;
+    private static readonly double DarkTextLuminance = ScreenLuminanceSampler.RelativeLuminance(0x16, 0x1A, 0x21);
     private readonly List<bool?> _useLightText = [];
 
     public IReadOnlyList<bool> Analyze(ScreenPixelBuffer pixels, IReadOnlyList<Int32Rect> characterRegions, bool fallbackUseLightText)
     {
+        ArgumentNullException.ThrowIfNull(characterRegions);
+        var results = new bool[characterRegions.Count];
+        Analyze(pixels, characterRegions, fallbackUseLightText, results);
+        return results;
+    }
+
+    /// <summary>将字符颜色写入调用方的缓冲区，返回其中是否有颜色发生变化。</summary>
+    public bool Analyze(ScreenPixelBuffer pixels, IReadOnlyList<Int32Rect> characterRegions, bool fallbackUseLightText, Span<bool> results)
+    {
         ArgumentNullException.ThrowIfNull(pixels);
         ArgumentNullException.ThrowIfNull(characterRegions);
-        ResizeState(characterRegions.Count);
+        if (results.Length < characterRegions.Count)
+            throw new ArgumentException("结果缓冲区不能小于字符数。", nameof(results));
 
-        var results = new bool[characterRegions.Count];
+        ResizeState(characterRegions.Count);
+        bool changed = false;
         for (int i = 0; i < characterRegions.Count; i++)
         {
             double? luminance = SampleBackgroundLuminance(pixels, characterRegions[i]);
@@ -22,24 +35,25 @@ public sealed class CharacterContrastService
             if (luminance.HasValue)
             {
                 double lightContrast = ContrastRatio(1, luminance.Value);
-                double darkContrast = ContrastRatio(ScreenLuminanceSampler.RelativeLuminance(0x16, 0x1A, 0x21), luminance.Value);
+                double darkContrast = ContrastRatio(DarkTextLuminance, luminance.Value);
                 if (current && darkContrast > lightContrast * SwitchAdvantage) current = false;
                 else if (!current && lightContrast > darkContrast * SwitchAdvantage) current = true;
             }
             _useLightText[i] = current;
+            changed |= results[i] != current;
             results[i] = current;
         }
-        return results;
+        return changed;
     }
 
     public void Reset() => _useLightText.Clear();
 
     public static Int32Rect Union(IReadOnlyList<Int32Rect> regions)
     {
-        if (regions.Count == 0) return Int32Rect.Empty;
         int left = int.MaxValue, top = int.MaxValue, right = int.MinValue, bottom = int.MinValue;
-        foreach (Int32Rect region in regions)
+        for (int i = 0; i < regions.Count; i++)
         {
+            Int32Rect region = regions[i];
             if (region.Width <= 0 || region.Height <= 0) continue;
             left = Math.Min(left, region.X);
             top = Math.Min(top, region.Y);
@@ -58,25 +72,36 @@ public sealed class CharacterContrastService
         if (right <= left || bottom <= top) return null;
 
         // 优先采样布局单元的边缘与内部空白，减少当前文字笔画对截图结果的污染。
-        var samples = new List<double>(Math.Min((right - left) * (bottom - top), 256));
-        int insetX = Math.Max(1, (right - left) / 5);
-        int insetY = Math.Max(1, (bottom - top) / 5);
-        int step = Math.Max(1, Math.Min(right - left, bottom - top) / 12);
-        for (int y = top; y < bottom; y += step)
+        int width = right - left, height = bottom - top;
+        int insetX = Math.Max(1, width / 5);
+        int insetY = Math.Max(1, height / 5);
+        int step = Math.Max(1, Math.Min(width, height) / 12);
+        int capacity = ((width - 1) / step + 1) * ((height - 1) / step + 1);
+        double[]? rented = null;
+        Span<double> samples = capacity <= 512 ? stackalloc double[capacity] : (rented = ArrayPool<double>.Shared.Rent(capacity));
+        try
         {
-            for (int x = left; x < right; x += step)
+            int count = 0;
+            for (int y = top; y < bottom; y += step)
             {
-                bool edge = x < left + insetX || x >= right - insetX || y < top + insetY || y >= bottom - insetY;
-                if (!edge || !pixels.TryGetPixel(x, y, out byte r, out byte g, out byte b)) continue;
-                samples.Add(ScreenLuminanceSampler.RelativeLuminance(r, g, b));
+                for (int x = left; x < right; x += step)
+                {
+                    bool edge = x < left + insetX || x >= right - insetX || y < top + insetY || y >= bottom - insetY;
+                    if (!edge || !pixels.TryGetPixel(x, y, out byte r, out byte g, out byte b)) continue;
+                    samples[count++] = ScreenLuminanceSampler.RelativeLuminance(r, g, b);
+                }
             }
-        }
-        if (samples.Count < 4) return null;
+            if (count < 4) return null;
 
-        samples.Sort();
-        // 中位数能抵抗少量前景笔画和动态高光，比平均值更稳定。
-        int middle = samples.Count / 2;
-        return samples.Count % 2 == 0 ? (samples[middle - 1] + samples[middle]) / 2 : samples[middle];
+            samples[..count].Sort();
+            // 中位数能抵抗少量前景笔画和动态高光，比平均值更稳定。
+            int middle = count / 2;
+            return count % 2 == 0 ? (samples[middle - 1] + samples[middle]) / 2 : samples[middle];
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<double>.Shared.Return(rented);
+        }
     }
 
     private static double ContrastRatio(double a, double b) =>

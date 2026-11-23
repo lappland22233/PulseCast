@@ -34,6 +34,20 @@ public class CharacterContrastServiceTests
     }
 
     [Fact]
+    public void Analyze_ReportsChangesWhenReusingDecisionBuffer()
+    {
+        var service = new CharacterContrastService();
+        Int32Rect region = new(0, 0, 10, 10);
+        Int32Rect[] regions = [region];
+        var pixels = SolidBuffer(region, 255, 255, 255);
+        bool[] results = [true];
+
+        Assert.True(service.Analyze(pixels, regions, fallbackUseLightText: true, results));
+        Assert.False(results[0]);
+        Assert.False(service.Analyze(pixels, regions, fallbackUseLightText: true, results));
+    }
+
+    [Fact]
     public void Analyze_ChoosesColorsIndependentlyAcrossSplitBackground()
     {
         var region = new Int32Rect(-10, -5, 20, 10);

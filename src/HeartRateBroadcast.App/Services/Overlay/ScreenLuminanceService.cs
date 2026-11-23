@@ -15,6 +15,8 @@ public interface IScreenLuminanceSampler
     Task<double?> SampleAsync(Int32Rect region, CancellationToken cancellationToken = default);
     ScreenPixelBuffer? Capture(Int32Rect region);
     Task<ScreenPixelBuffer?> CaptureAsync(Int32Rect region, CancellationToken cancellationToken = default);
+    /// <summary>将截图写入调用方提供的 BGRA 缓冲区，返回引用该缓冲区的像素视图。</summary>
+    Task<ScreenPixelBuffer?> CaptureIntoAsync(Int32Rect region, byte[] destination, CancellationToken cancellationToken = default);
 }
 
 /// <summary>一次屏幕区域捕获的自上而下 BGRA 像素缓冲区。</summary>
@@ -75,20 +77,34 @@ public sealed class ScreenLuminanceSampler : IScreenLuminanceSampler
             return Capture(region);
         }, cancellationToken);
 
+    public Task<ScreenPixelBuffer?> CaptureIntoAsync(Int32Rect region, byte[] destination, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Capture(region, destination);
+        }, cancellationToken);
+    }
+
     public double? Sample(Int32Rect region)
     {
         ScreenPixelBuffer? capture = Capture(region);
         return capture is null ? null : AverageLuminance(capture.Bgra);
     }
 
-    public ScreenPixelBuffer? Capture(Int32Rect region)
+    public ScreenPixelBuffer? Capture(Int32Rect region) => Capture(region, null);
+
+    private static ScreenPixelBuffer? Capture(Int32Rect region, byte[]? destination)
     {
         if (region.Width <= 0 || region.Height <= 0) return null;
         int byteCount;
         try { byteCount = checked(region.Width * region.Height * 4); }
         catch (OverflowException) { return null; }
+        if (destination is not null && destination.Length < byteCount)
+            throw new ArgumentException("像素缓冲区尺寸小于捕获区域。", nameof(destination));
 
-        nint screenDc = nint.Zero, memDc = nint.Zero, hbm = nint.Zero, oldObj = nint.Zero;
+        nint screenDc = nint.Zero, memDc = nint.Zero, hbm = nint.Zero;
         try
         {
             screenDc = NativeMethods.GetDC(nint.Zero);
@@ -97,11 +113,15 @@ public sealed class ScreenLuminanceSampler : IScreenLuminanceSampler
             if (memDc == nint.Zero) return null;
             hbm = NativeMethods.CreateCompatibleBitmap(screenDc, region.Width, region.Height);
             if (hbm == nint.Zero) return null;
-            oldObj = NativeMethods.SelectObject(memDc, hbm);
+            nint oldObj = NativeMethods.SelectObject(memDc, hbm);
             if (oldObj == nint.Zero || oldObj == new nint(-1)) return null;
 
             bool ok = NativeMethods.BitBlt(memDc, 0, 0, region.Width, region.Height, screenDc, region.X, region.Y, NativeMethods.SrcCopy);
             if (!ok) return null;
+
+            // GetDIBits 要求位图未选入设备上下文。
+            nint selected = NativeMethods.SelectObject(memDc, oldObj);
+            if (selected == nint.Zero || selected == new nint(-1)) return null;
 
             var bmi = new NativeMethods.BitMapInfo();
             bmi.BmiHeader.BiSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.BitMapInfoHeader>();
@@ -111,15 +131,14 @@ public sealed class ScreenLuminanceSampler : IScreenLuminanceSampler
             bmi.BmiHeader.BiBitCount = 32;
             bmi.BmiHeader.BiCompression = NativeMethods.BiRgb;
 
-            byte[] bits = new byte[byteCount];
+            byte[] bits = destination ?? GC.AllocateUninitializedArray<byte>(byteCount);
             int lines = NativeMethods.GetDIBits(memDc, hbm, 0, (uint)region.Height, bits, ref bmi, NativeMethods.DibRgbColors);
             return lines == region.Height ? new ScreenPixelBuffer(region, bits) : null;
         }
         finally
         {
-            if (oldObj != nint.Zero && oldObj != new nint(-1) && memDc != nint.Zero) NativeMethods.SelectObject(memDc, oldObj);
-            if (hbm != nint.Zero) NativeMethods.DeleteObject(hbm);
             if (memDc != nint.Zero) NativeMethods.DeleteDC(memDc);
+            if (hbm != nint.Zero) NativeMethods.DeleteObject(hbm);
             if (screenDc != nint.Zero) _ = NativeMethods.ReleaseDC(nint.Zero, screenDc);
         }
     }

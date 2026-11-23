@@ -31,7 +31,7 @@ public partial class OverlayViewModel : ObservableObject
     [ObservableProperty] private string gradientId = "红粉";
     [ObservableProperty] private bool hideBackground;
 
-    public double NumberFontSize => Settings.FontSize * Scale;
+    public double NumberFontSize => Settings.FontSize;
 
     public FontFamily NumberFontFamily => NumberFont switch
     {
@@ -63,11 +63,7 @@ public partial class OverlayViewModel : ObservableObject
         });
     }
 
-    partial void OnScaleChanged(double value)
-    {
-        Settings.Scale = value;
-        OnPropertyChanged(nameof(NumberFontSize));
-    }
+    partial void OnScaleChanged(double value) => Settings.Scale = value;
     partial void OnOverlayOpacityChanged(double value) => Settings.Opacity = value;
     partial void OnNumberFontChanged(string value) { Settings.NumberFont = value; OnPropertyChanged(nameof(NumberFontFamily)); }
     partial void OnShowHeartChanged(bool value) => Settings.ShowHeart = value;

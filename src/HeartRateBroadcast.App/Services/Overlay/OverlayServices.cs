@@ -13,33 +13,37 @@ namespace HeartRateBroadcast.App.Services.Overlay;
 public sealed class TopmostWindowService : IDisposable
 {
     private readonly Window _window;
-    private readonly System.Threading.Timer _watchdog;
+    private readonly DispatcherTimer _watchdog;
     private nint _handle;
-    private bool _disposed;
 
     public TopmostWindowService(Window window)
     {
         _window = window;
-        _watchdog = new(_ =>
+        _watchdog = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
         {
-            if (!_disposed)
-            {
-                _window.Dispatcher.BeginInvoke(() =>
-                {
-                    try { EnsureTopmost(); }
-                    catch (Win32Exception) { }
-                });
-            }
-        }, null, Timeout.Infinite, Timeout.Infinite);
+            Interval = TimeSpan.FromMilliseconds(1500),
+        };
+        _watchdog.Tick += OnWatchdogTick;
+        _window.IsVisibleChanged += OnVisibilityChanged;
     }
 
     public void Attach(bool clickThrough)
     {
         _handle = new WindowInteropHelper(_window).Handle;
         if (_handle == 0) throw new InvalidOperationException("悬浮窗句柄尚未初始化");
+        UpdateWatchdog();
         SetClickThrough(clickThrough);
         EnsureTopmost();
-        _watchdog.Change(1500, 1500);
+    }
+
+    private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e) => UpdateWatchdog();
+
+    private void UpdateWatchdog() => _watchdog.IsEnabled = _handle != 0 && _window.IsVisible;
+
+    private void OnWatchdogTick(object? sender, EventArgs e)
+    {
+        try { EnsureTopmost(); }
+        catch (Win32Exception) { }
     }
 
     public void SetClickThrough(bool clickThrough)
@@ -68,8 +72,9 @@ public sealed class TopmostWindowService : IDisposable
 
     public void Dispose()
     {
-        _disposed = true;
-        _watchdog.Dispose();
+        _window.IsVisibleChanged -= OnVisibilityChanged;
+        _watchdog.Stop();
+        _watchdog.Tick -= OnWatchdogTick;
     }
 }
 
@@ -132,12 +137,13 @@ public sealed class DisplayPlacementService
 
 public interface IOverlayWindowManager
 {
-    OverlayWindow Window { get; }
+    bool IsVisible { get; }
     bool IsLocked { get; }
     bool IsBackgroundHidden { get; }
     bool IsClickThrough { get; }
     event EventHandler? PlacementChanged;
     void Show();
+    void Hide();
     void SetLocked(bool locked);
     void SetBackgroundHidden(bool hidden);
     void SetClickThrough(bool enabled);
@@ -146,64 +152,76 @@ public interface IOverlayWindowManager
 
 public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
 {
+    private readonly Func<OverlayWindow> _createWindow;
     private readonly OverlaySettings _settings;
     private readonly DisplayPlacementService _placement;
-    private readonly TopmostWindowService _topmost;
-    private readonly DispatcherTimer _displayDebounce;
+    private OverlayWindow? _window;
+    private TopmostWindowService? _topmost;
+    private DispatcherTimer? _displayDebounce;
     private HwndSource? _source;
     private bool _disposed;
 
-    public OverlayWindow Window { get; }
+    public bool IsVisible => _window?.IsVisible == true;
     public bool IsLocked => _settings.Locked;
     public bool IsBackgroundHidden => _settings.HideBackground;
     public bool IsClickThrough => _settings.ClickThrough;
     public event EventHandler? PlacementChanged;
 
-    public OverlayWindowManager(OverlayWindow window, AppSettings settings, DisplayPlacementService placement)
+    public OverlayWindowManager(Func<OverlayWindow> createWindow, AppSettings settings, DisplayPlacementService placement)
     {
-        Window = window;
+        _createWindow = createWindow;
         _settings = settings.Overlay;
         _placement = placement;
+    }
+
+    private OverlayWindow CreateWindow()
+    {
+        var window = _createWindow();
         _topmost = new(window);
-        _displayDebounce = new DispatcherTimer(DispatcherPriority.Loaded, Window.Dispatcher)
+        _displayDebounce = new DispatcherTimer(DispatcherPriority.Loaded, window.Dispatcher)
         {
             Interval = TimeSpan.FromMilliseconds(120),
         };
         _displayDebounce.Tick += OnDisplayDebounce;
-        Window.IsPositionLocked = _settings.Locked;
-        Window.SetBackgroundHidden(_settings.HideBackground);
-        Window.SourceInitialized += OnSourceInitialized;
-        Window.LocationChanged += OnWindowLocationChanged;
-        Window.SizeChanged += OnWindowSizeChanged;
+        window.IsPositionLocked = _settings.Locked;
+        window.SetBackgroundHidden(_settings.HideBackground);
+        window.SourceInitialized += OnSourceInitialized;
+        window.LocationChanged += OnWindowLocationChanged;
+        window.SizeChanged += OnWindowSizeChanged;
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
+        return window;
     }
 
     public void Show()
     {
-        if (!Window.IsVisible) Window.Show();
-        Window.Dispatcher.BeginInvoke(() =>
-        {
-            _placement.Apply(Window, _settings);
-            TryEnsureTopmost();
-        }, DispatcherPriority.Loaded);
+        if (_disposed) return;
+        var window = _window ??= CreateWindow();
+        if (!window.IsVisible) window.Show();
+        window.Dispatcher.BeginInvoke(ApplyPlacement, DispatcherPriority.Loaded);
+    }
+
+    public void Hide()
+    {
+        _displayDebounce?.Stop();
+        if (_window is { IsVisible: true } window) window.Hide();
     }
 
     public void SetLocked(bool locked)
     {
         _settings.Locked = locked;
-        Window.IsPositionLocked = locked;
+        if (_window is { } window) window.IsPositionLocked = locked;
     }
 
     public void SetBackgroundHidden(bool hidden)
     {
         _settings.HideBackground = hidden;
-        Window.SetBackgroundHidden(hidden);
+        _window?.SetBackgroundHidden(hidden);
     }
 
     public void SetClickThrough(bool enabled)
     {
         _settings.ClickThrough = enabled;
-        try { _topmost.SetClickThrough(enabled); }
+        try { _topmost?.SetClickThrough(enabled); }
         catch (Win32Exception) { _settings.ClickThrough = false; }
     }
 
@@ -211,9 +229,10 @@ public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
 
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
-        try { _topmost.Attach(_settings.ClickThrough); }
+        if (_window is not { } window) return;
+        try { _topmost?.Attach(_settings.ClickThrough); }
         catch (Win32Exception) { _settings.ClickThrough = false; }
-        _source = HwndSource.FromHwnd(new WindowInteropHelper(Window).Handle);
+        _source = HwndSource.FromHwnd(new WindowInteropHelper(window).Handle);
         _source?.AddHook(WindowProc);
     }
 
@@ -222,27 +241,33 @@ public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
 
     private void SavePlacement()
     {
-        if (!Window.IsVisible || _settings.Locked || _disposed) return;
-        Rect area = _placement.GetWorkAreaDip(Window, out string deviceName);
+        if (_disposed || _settings.Locked || _window is not { IsVisible: true } window) return;
+        Rect area = _placement.GetWorkAreaDip(window, out string deviceName);
         _settings.MonitorDeviceName = deviceName;
-        _settings.RightOffset = Math.Max(0, area.Right - Window.Left - Window.ActualWidth);
-        _settings.TopOffset = Math.Max(0, Window.Top - area.Top);
+        _settings.RightOffset = Math.Max(0, area.Right - window.Left - window.ActualWidth);
+        _settings.TopOffset = Math.Max(0, window.Top - area.Top);
         PlacementChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private void OnDisplayChanged(object? sender, EventArgs e) => Window.Dispatcher.BeginInvoke(ScheduleDisplayUpdate);
+    private void OnDisplayChanged(object? sender, EventArgs e) => _window?.Dispatcher.BeginInvoke(ScheduleDisplayUpdate);
 
     private void ScheduleDisplayUpdate()
     {
-        if (_disposed) return;
-        _displayDebounce.Stop();
-        _displayDebounce.Start();
+        if (_disposed || _window?.IsVisible != true || _displayDebounce is not { } timer) return;
+        timer.Stop();
+        timer.Start();
     }
 
     private void OnDisplayDebounce(object? sender, EventArgs e)
     {
-        _displayDebounce.Stop();
-        _placement.Apply(Window, _settings);
+        _displayDebounce?.Stop();
+        ApplyPlacement();
+    }
+
+    private void ApplyPlacement()
+    {
+        if (_disposed || _window is not { IsVisible: true } window) return;
+        _placement.Apply(window, _settings);
         TryEnsureTopmost();
     }
 
@@ -255,7 +280,7 @@ public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
 
     private void TryEnsureTopmost()
     {
-        try { _topmost.EnsureTopmost(); }
+        try { _topmost?.EnsureTopmost(); }
         catch (Win32Exception) { }
     }
 
@@ -263,14 +288,22 @@ public sealed class OverlayWindowManager : IOverlayWindowManager, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _displayDebounce.Stop();
-        _displayDebounce.Tick -= OnDisplayDebounce;
-        SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
-        Window.SourceInitialized -= OnSourceInitialized;
-        Window.LocationChanged -= OnWindowLocationChanged;
-        Window.SizeChanged -= OnWindowSizeChanged;
+        if (_displayDebounce is { } timer)
+        {
+            timer.Stop();
+            timer.Tick -= OnDisplayDebounce;
+        }
+
+        if (_window is { } window)
+        {
+            SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
+            window.SourceInitialized -= OnSourceInitialized;
+            window.LocationChanged -= OnWindowLocationChanged;
+            window.SizeChanged -= OnWindowSizeChanged;
+        }
+
         _source?.RemoveHook(WindowProc);
         _source = null;
-        _topmost.Dispose();
+        _topmost?.Dispose();
     }
 }

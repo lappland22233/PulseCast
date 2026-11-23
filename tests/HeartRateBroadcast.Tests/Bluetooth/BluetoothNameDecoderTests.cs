@@ -95,5 +95,14 @@ public class BluetoothNameDecoderTests
         string name = BluetoothNameDecoder.Decode(sections, "");
         Assert.Equal("未知设备", name);
     }
+
+    [Theory]
+    [InlineData(" \0 Garmin\n HRM \t", "Garmin HRM")]
+    [InlineData(" \0 \r\n ", "未知设备")]
+    [InlineData("  HRM\t Pro  ", "HRM\t Pro")]
+    public void Decode_TrimsWhitespaceAndRemovesControlCharacters(string localName, string expected)
+    {
+        Assert.Equal(expected, BluetoothNameDecoder.Decode(null, localName));
+    }
 }
 

@@ -2,477 +2,338 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=System.Runtime"
-        Title="PulseCast - 心率广播" Width="1100" Height="780" MinWidth="780" MinHeight="560"
-        WindowStartupLocation="CenterScreen"
-        WindowStyle="None" ResizeMode="CanResize"
-        Style="{StaticResource AppWindow}">
+        Title="PulseCast" Width="1050" Height="720" MinWidth="780" MinHeight="520"
+        WindowStartupLocation="CenterScreen" Style="{StaticResource AppWindow}">
     <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <BooleanToVisibilityConverter x:Key="BooleanVisibility"/>
+        <Style x:Key="ColumnHeading" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SettingLabel" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="Margin" Value="0,0,0,5"/>
+        </Style>
+        <Style x:Key="OverlayAction" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
+            <Setter Property="Padding" Value="5,5"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <DataTemplate x:Key="AppearanceSettings">
+            <StackPanel Margin="0,6,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="自动反色" Style="{StaticResource SettingLabel}"/>
+                        <ComboBox AutomationProperties.Name="自动反色" SelectedValue="{Binding Overlay.InversionMode, Mode=TwoWay}"
+                                  ToolTip="隐藏背景时，自动按每个数字下方的明暗选色">
+                            <sys:String>自动</sys:String>
+                            <sys:String>强制浅字</sys:String>
+                            <sys:String>强制深字</sys:String>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="数字字体" Style="{StaticResource SettingLabel}"/>
+                        <ComboBox AutomationProperties.Name="数字字体" SelectedValue="{Binding Overlay.NumberFont, Mode=TwoWay}">
+                            <sys:String>等宽</sys:String>
+                            <sys:String>仪表</sys:String>
+                            <sys:String>无衬线</sys:String>
+                        </ComboBox>
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Text="数字颜色" Style="{StaticResource SettingLabel}" Margin="0,13,0,5"/>
+                <ComboBox AutomationProperties.Name="数字颜色" SelectedValue="{Binding Overlay.ColorMode, Mode=TwoWay}">
+                    <sys:String>自动</sys:String>
+                    <sys:String>逐字渐变</sys:String>
+                    <sys:String>单色</sys:String>
+                </ComboBox>
+
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition/>
+                        <ColumnDefinition Width="12"/>
+                        <ColumnDefinition/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="渐变预设" Style="{StaticResource SettingLabel}"/>
+                        <ComboBox AutomationProperties.Name="渐变预设" SelectedValue="{Binding Overlay.GradientId, Mode=TwoWay}">
+                            <sys:String>红粉</sys:String>
+                            <sys:String>冰蓝</sys:String>
+                            <sys:String>翠绿</sys:String>
+                            <sys:String>金橙</sys:String>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="单色预设" Style="{StaticResource SettingLabel}"/>
+                        <ComboBox AutomationProperties.Name="单色预设" SelectedValue="{Binding Overlay.SolidColor, Mode=TwoWay}">
+                            <sys:String>纯白</sys:String>
+                            <sys:String>深黑</sys:String>
+                            <sys:String>心率红</sys:String>
+                            <sys:String>荧光绿</sys:String>
+                            <sys:String>天蓝</sys:String>
+                            <sys:String>琥珀</sys:String>
+                            <sys:String>橙</sys:String>
+                            <sys:String>玫红</sys:String>
+                        </ComboBox>
+                    </StackPanel>
+                </Grid>
+
+                <WrapPanel Margin="0,15,0,2">
+                    <CheckBox Content="心形图标" IsChecked="{Binding Overlay.ShowHeart, Mode=TwoWay}" Margin="0,0,13,6"/>
+                    <CheckBox Content="BPM 单位" IsChecked="{Binding Overlay.ShowUnit, Mode=TwoWay}" Margin="0,0,13,6"/>
+                    <CheckBox Content="心率状态" IsChecked="{Binding Overlay.ShowLive, Mode=TwoWay}" Margin="0,0,0,6"/>
+                </WrapPanel>
+
+                <TextBlock Margin="0,8,0,0">
+                    <Run Text="缩放"/><Run Text="  "/><Run Text="{Binding Overlay.Scale, Mode=OneWay, StringFormat={}{0:F2}×}" Foreground="{StaticResource TextMuted}"/>
+                </TextBlock>
+                <Slider AutomationProperties.Name="缩放" Minimum="0.75" Maximum="1.5" Value="{Binding Overlay.Scale, Mode=TwoWay}"
+                        TickFrequency="0.05" IsSnapToTickEnabled="True"/>
+                <TextBlock Margin="0,8,0,0">
+                    <Run Text="不透明度"/><Run Text="  "/><Run Text="{Binding Overlay.OverlayOpacity, Mode=OneWay, StringFormat={}{0:P0}}" Foreground="{StaticResource TextMuted}"/>
+                </TextBlock>
+                <Slider AutomationProperties.Name="不透明度" Minimum="0.5" Maximum="1" Value="{Binding Overlay.OverlayOpacity, Mode=TwoWay}"
+                        TickFrequency="0.05" IsSnapToTickEnabled="True"/>
+            </StackPanel>
+        </DataTemplate>
     </Window.Resources>
-    <WindowChrome.WindowChrome>
-        <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/>
-    </WindowChrome.WindowChrome>
 
-    <!-- 根 Border：常规态绘制 1px 发丝边框；最大化时内缩 6px 防止贴边裁剪 -->
-    <Border>
-        <Border.Style>
-            <Style TargetType="Border">
-                <Setter Property="BorderBrush" Value="{StaticResource ControlBorder}"/>
-                <Setter Property="BorderThickness" Value="1"/>
-                <Style.Triggers>
-                    <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized">
-                        <Setter Property="BorderThickness" Value="0"/>
-                        <Setter Property="Margin" Value="6"/>
-                    </DataTrigger>
-                </Style.Triggers>
-            </Style>
-        </Border.Style>
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="40"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-
-            <!-- 自绘标题栏 -->
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,8,0">
-                    <Path Data="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"
-                          Fill="{StaticResource Primary}" Stretch="Uniform" Width="14" Height="14" VerticalAlignment="Center"/>
-                    <TextBlock Text="PulseCast" FontWeight="Bold" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                    <Border Background="#1FFFFFFF" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="心率广播雷达" Foreground="{StaticResource TextMuted}" FontSize="11"/>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="76"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Border BorderBrush="{StaticResource Separator}" BorderThickness="0,0,0,1">
+            <DockPanel Margin="26,0">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="{Binding ScanButtonText}" Command="{Binding ToggleScanCommand}" MinWidth="98"
+                            AutomationProperties.HelpText="开始或停止扫描附近的蓝牙设备"/>
+                    <Button Content="打开悬浮窗" Command="{Binding ShowOverlayCommand}" Style="{StaticResource PrimaryButton}"
+                            MinWidth="108" Margin="9,0,0,0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="35" Height="35" Background="{StaticResource SelectedSurface}" CornerRadius="5" Margin="0,0,11,0">
+                        <Path Data="M1,11 L6,11 9,5 13,17 17,8 20,11 24,11" Stroke="{StaticResource Accent}"
+                              StrokeThickness="1.6" StrokeLineJoin="Round" Stretch="Uniform" Width="24" VerticalAlignment="Center"/>
                     </Border>
+                    <TextBlock Text="心率广播" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center"/>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Style="{StaticResource CaptionButton}" Command="{x:Static SystemCommands.MinimizeWindowCommand}"
-                            ToolTip="最小化" AutomationProperties.Name="最小化窗口">
-                        <TextBlock Style="{StaticResource CaptionGlyph}" Text="&#xE921;"/>
-                    </Button>
-                    <Button Style="{StaticResource CaptionButton}" Command="{x:Static SystemCommands.MaximizeWindowCommand}"
-                            ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原窗口">
-                        <TextBlock Style="{StaticResource MaximizeGlyph}"/>
-                    </Button>
-                    <Button Style="{StaticResource CloseCaptionButton}" Command="{x:Static SystemCommands.CloseWindowCommand}"
-                            ToolTip="关闭" AutomationProperties.Name="关闭窗口">
-                        <TextBlock Style="{StaticResource CaptionGlyph}" Text="&#xE8BB;"/>
-                    </Button>
-                </StackPanel>
-                <Border Height="1" Background="{StaticResource Border}" VerticalAlignment="Bottom"/>
-            </Grid>
+            </DockPanel>
+        </Border>
 
-            <!-- 内容区 -->
-            <Grid Grid.Row="1" Margin="24,20,24,20">
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.55*"/>
+                <ColumnDefinition Width="*" MinWidth="322"/>
+            </Grid.ColumnDefinitions>
+
+            <Grid Margin="26,22,24,20">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- 顶层 Header -->
-                <Grid Margin="0,0,0,18">
+                <TextBlock Text="附近设备" Style="{StaticResource SectionHeading}"/>
+                <Grid Grid.Row="1" Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="设备与心率控制台" FontSize="24" FontWeight="Bold"/>
-                            <Border Background="{StaticResource SurfaceAlt}" CornerRadius="12" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
-                                <StackPanel Orientation="Horizontal">
-                                    <Ellipse Width="7" Height="7" Fill="{Binding StatusBrush}" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontSize="12" FontWeight="SemiBold" Margin="6,0,0,0"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                        <TextBlock Text="实时雷达扫描并过滤附近的 BLE 广播心率设备，一键开启悬浮窗" Foreground="{StaticResource TextMuted}" Margin="0,4,0,0" FontSize="12"/>
-                    </StackPanel>
-
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <Button Content="打开心率悬浮窗" Command="{Binding ShowOverlayCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,0" Padding="18,9"/>
-                        <Button Content="{Binding ScanButtonText}" Command="{Binding ToggleScanCommand}" Padding="16,9"
-                                AutomationProperties.HelpText="开始或停止搜索附近的蓝牙心率设备"/>
-                    </StackPanel>
+                    <Grid>
+                        <TextBox Style="{StaticResource SearchTextBox}" AutomationProperties.Name="搜索设备"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Escape" Command="{Binding ClearSearchCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <Path Data="M5,1 A4,4 0 1 1 5,9 A4,4 0 1 1 5,1 M8,8 L12,12" Stroke="{StaticResource TextMuted}"
+                              StrokeThickness="1.2" Margin="10,0,0,0" HorizontalAlignment="Left" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                        <TextBlock Text="搜索名称或地址" Foreground="{StaticResource TextFaint}" Margin="32,0,32,0"
+                                   VerticalAlignment="Center" IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasSearchText}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <Button Command="{Binding ClearSearchCommand}" ToolTip="清空搜索" AutomationProperties.Name="清空搜索"
+                                Style="{StaticResource QuietButton}" MinHeight="24" Width="24" Padding="0"
+                                HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,5,0"
+                                Visibility="{Binding HasSearchText, Converter={StaticResource BooleanVisibility}}">
+                            <Path Data="M0,0 L7,7 M7,0 L0,7" Stroke="{StaticResource TextMuted}" StrokeThickness="1.4"/>
+                        </Button>
+                    </Grid>
+                    <CheckBox Grid.Column="1" Content="隐藏匿名设备" IsChecked="{Binding HideUnknownDevices, Mode=TwoWay}"
+                              VerticalAlignment="Center" Margin="13,0,0,0" Foreground="{StaticResource TextMuted}"/>
                 </Grid>
 
-                <!-- 主体左右双栏 -->
-                <Grid Grid.Row="1">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="1.2*"/>
-                        <ColumnDefinition Width="20"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
+                <Border Grid.Row="2" Margin="0,14,0,0" BorderBrush="{StaticResource Separator}" BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Command="{Binding ShowHeartRateOnlyCommand}" Margin="0,0,19,0">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource DeviceTab}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding FilterHeartRateOnly}" Value="True">
+                                            <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <TextBlock><Run Text="心率设备"/><Run Text="  "/><Run Text="{Binding HeartRateDeviceCount, Mode=OneWay}" Foreground="{StaticResource TextMuted}"/></TextBlock>
+                        </Button>
+                        <Button Command="{Binding ShowAllDevicesCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource DeviceTab}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding FilterHeartRateOnly}" Value="False">
+                                            <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <TextBlock><Run Text="全部设备"/><Run Text="  "/><Run Text="{Binding TotalDeviceCount, Mode=OneWay}" Foreground="{StaticResource TextMuted}"/></TextBlock>
+                        </Button>
+                    </StackPanel>
+                </Border>
 
-                    <!-- 左列：设备雷达与精准筛选 -->
-                    <Border Style="{StaticResource Card}">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                <Border Grid.Row="3" Background="{StaticResource Surface}" BorderBrush="{StaticResource Separator}"
+                        BorderThickness="0,0,0,1" Padding="10,0,20,0">
+                    <Grid Height="30">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="111"/>
+                            <ColumnDefinition Width="76"/>
+                            <ColumnDefinition Width="67"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="设备" Style="{StaticResource ColumnHeading}"/>
+                        <TextBlock Grid.Column="1" Text="地址" Style="{StaticResource ColumnHeading}"/>
+                        <TextBlock Grid.Column="2" Text="类型" Style="{StaticResource ColumnHeading}"/>
+                        <TextBlock Grid.Column="3" Text="信号" Style="{StaticResource ColumnHeading}" HorizontalAlignment="Right"/>
+                    </Grid>
+                </Border>
 
-                            <!-- 工具栏第一行：模式分段切换 + 匿名过滤 -->
-                            <Grid Margin="0,0,0,12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-
-                                <!-- 药丸切换器 -->
-                                <Border Background="{StaticResource SurfaceAlt}" CornerRadius="8" Padding="3">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="心率设备" Command="{Binding ShowHeartRateOnlyCommand}"
-                                                Padding="12,4" FontSize="12" FontWeight="SemiBold" Cursor="Hand">
-                                            <Button.Style>
-                                                <Style TargetType="Button">
-                                                    <Setter Property="Background" Value="Transparent"/>
-                                                    <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
-                                                    <Setter Property="Template">
-                                                        <Setter.Value>
-                                                            <ControlTemplate TargetType="Button">
-                                                                <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                                                                    <StackPanel Orientation="Horizontal">
-                                                                        <TextBlock Text="心率设备" VerticalAlignment="Center"/>
-                                                                        <Border Background="{StaticResource PrimarySoft}" CornerRadius="8" Padding="5,0" Margin="6,0,0,0" VerticalAlignment="Center">
-                                                                            <TextBlock Text="{Binding HeartRateDeviceCount}" Foreground="{StaticResource Primary}" FontSize="11" FontWeight="Bold"/>
-                                                                        </Border>
-                                                                    </StackPanel>
-                                                                </Border>
-                                                            </ControlTemplate>
-                                                        </Setter.Value>
-                                                    </Setter>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding FilterHeartRateOnly}" Value="True">
-                                                            <Setter Property="Background" Value="{StaticResource SurfaceHover}"/>
-                                                            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Button.Style>
-                                        </Button>
-
-                                        <Button Content="全部设备" Command="{Binding ShowAllDevicesCommand}"
-                                                Padding="12,4" FontSize="12" FontWeight="SemiBold" Cursor="Hand" Margin="2,0,0,0">
-                                            <Button.Style>
-                                                <Style TargetType="Button">
-                                                    <Setter Property="Background" Value="Transparent"/>
-                                                    <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
-                                                    <Setter Property="Template">
-                                                        <Setter.Value>
-                                                            <ControlTemplate TargetType="Button">
-                                                                <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                                                                    <StackPanel Orientation="Horizontal">
-                                                                        <TextBlock Text="全部设备" VerticalAlignment="Center"/>
-                                                                        <Border Background="#14FFFFFF" CornerRadius="8" Padding="5,0" Margin="6,0,0,0" VerticalAlignment="Center">
-                                                                            <TextBlock Text="{Binding TotalDeviceCount}" Foreground="{StaticResource TextFaint}" FontSize="11"/>
-                                                                        </Border>
-                                                                    </StackPanel>
-                                                                </Border>
-                                                            </ControlTemplate>
-                                                        </Setter.Value>
-                                                    </Setter>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding FilterHeartRateOnly}" Value="False">
-                                                            <Setter Property="Background" Value="{StaticResource SurfaceHover}"/>
-                                                            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Button.Style>
-                                        </Button>
-                                    </StackPanel>
-                                </Border>
-
-                                <!-- 过滤未知设备选项 -->
-                                <CheckBox Grid.Column="2" Content="过滤匿名信标" IsChecked="{Binding HideUnknownDevices, Mode=TwoWay}"
-                                          VerticalAlignment="Center" FontSize="12" ToolTip="隐藏没有设备名称的未知 BLE 广播"/>
-                            </Grid>
-
-                            <!-- 工具栏第二行：搜索框 -->
-                            <Grid Grid.Row="1" Margin="0,0,0,14">
-                                <TextBox Style="{StaticResource SearchTextBox}" Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                         Padding="28,7,26,7"/>
-                                <!-- 搜索图标 -->
-                                <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{StaticResource TextFaint}"
-                                           HorizontalAlignment="Left" VerticalAlignment="Center" Margin="9,0,0,0" IsHitTestVisible="False"/>
-                                <!-- 清除搜索按钮 -->
-                                <Button Grid.Column="0" Command="{Binding ClearSearchCommand}"
-                                        HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,6,0"
-                                        Style="{StaticResource IconButton}" ToolTip="清空搜索"
-                                        Visibility="{Binding SearchText.Length, Converter={StaticResource BoolToVis}}">
-                                    <TextBlock Text="&#xE894;" FontFamily="Segoe MDL2 Assets" FontSize="10" Foreground="{StaticResource TextMuted}"/>
-                                </Button>
-                            </Grid>
-
-                            <!-- 设备列表 -->
-                            <Grid Grid.Row="2">
-                                <ListBox ItemsSource="{Binding FilteredDevices}" SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
-                                         Background="Transparent" BorderThickness="0" Foreground="{StaticResource TextPrimary}"
-                                         AutomationProperties.Name="附近的蓝牙心率设备"
-                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Background="{StaticResource SurfaceAlt}" CornerRadius="12" Padding="12,10" Margin="0,0,0,8">
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-
-                                                    <!-- 左侧图标徽章 -->
-                                                    <Border Width="36" Height="36" CornerRadius="18" Background="#14FFFFFF" VerticalAlignment="Center">
-                                                        <Border.Style>
-                                                            <Style TargetType="Border">
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsHeartRateCandidate}" Value="True">
-                                                                        <Setter Property="Background" Value="{StaticResource PrimarySoft}"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Border.Style>
-                                                        <Path Stretch="Uniform" Width="14" Height="14" VerticalAlignment="Center" HorizontalAlignment="Center">
-                                                            <Path.Style>
-                                                                <Style TargetType="Path">
-                                                                    <Setter Property="Fill" Value="{StaticResource TextMuted}"/>
-                                                                    <Setter Property="Data" Value="M14.88,16.29L13,18.17V14.41M13,5.83L14.88,7.71L13,9.58V5.83M17.71,7.71L12,2H11V9.58L6.41,5L5,6.41L10.59,12L5,17.58L6.41,19L11,14.41V22H12L17.71,16.29L13.41,12L17.71,7.71Z"/>
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding IsHeartRateCandidate}" Value="True">
-                                                                            <Setter Property="Fill" Value="{StaticResource Primary}"/>
-                                                                            <Setter Property="Data" Value="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Path.Style>
-                                                        </Path>
-                                                    </Border>
-
-                                                    <!-- 中间信息 -->
-                                                    <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="13" TextTrimming="CharacterEllipsis"
-                                                                       MaxWidth="170" ToolTip="{Binding Name}"/>
-                                                            <!-- 分类小药丸标签 -->
-                                                            <Border CornerRadius="4" Padding="5,1" Margin="8,0,0,0" VerticalAlignment="Center">
-                                                                <Border.Style>
-                                                                    <Style TargetType="Border">
-                                                                        <Setter Property="Background" Value="#14FFFFFF"/>
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding Category}" Value="Broadcasting">
-                                                                                <Setter Property="Background" Value="#2222C55E"/>
-                                                                            </DataTrigger>
-                                                                            <DataTrigger Binding="{Binding Category}" Value="GattService">
-                                                                                <Setter Property="Background" Value="#2238BDF8"/>
-                                                                            </DataTrigger>
-                                                                            <DataTrigger Binding="{Binding Category}" Value="CandidateName">
-                                                                                <Setter Property="Background" Value="#22F59E0B"/>
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Border.Style>
-                                                                <TextBlock Text="{Binding CategoryBadgeText}" FontSize="10" FontWeight="SemiBold">
-                                                                    <TextBlock.Style>
-                                                                        <Style TargetType="TextBlock">
-                                                                            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding Category}" Value="Broadcasting">
-                                                                                    <Setter Property="Foreground" Value="{StaticResource Live}"/>
-                                                                                </DataTrigger>
-                                                                                <DataTrigger Binding="{Binding Category}" Value="GattService">
-                                                                                    <Setter Property="Foreground" Value="{StaticResource Info}"/>
-                                                                                </DataTrigger>
-                                                                                <DataTrigger Binding="{Binding Category}" Value="CandidateName">
-                                                                                    <Setter Property="Foreground" Value="{StaticResource Warn}"/>
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </TextBlock.Style>
-                                                                </TextBlock>
-                                                            </Border>
-                                                        </StackPanel>
-
-                                                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                                            <TextBlock Text="{Binding AddressText}" FontFamily="Cascadia Mono" FontSize="11" Foreground="{StaticResource TextMuted}"/>
-                                                            <TextBlock Text="·" Foreground="{StaticResource TextFaint}" Margin="6,0"/>
-                                                            <TextBlock Text="{Binding SignalStrengthDescription}" FontSize="11" Foreground="{StaticResource TextFaint}"/>
-                                                        </StackPanel>
-                                                    </StackPanel>
-
-                                                    <!-- 右侧信号 -->
-                                                    <StackPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right">
-                                                        <TextBlock Text="{Binding Rssi, StringFormat={}{0} dBm}" FontFamily="Cascadia Mono"
-                                                                   FontSize="11" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"/>
-                                                    </StackPanel>
-                                                </Grid>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-
-                                <!-- 空状态引导卡片 -->
-                                <Border Background="{StaticResource SurfaceAlt}" CornerRadius="12" Padding="24"
-                                        Visibility="{Binding HasNoDevices, Converter={StaticResource BoolToVis}}">
-                                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                        <TextBlock Text="&#xE95A;" FontFamily="Segoe MDL2 Assets" FontSize="32"
-                                                   Foreground="{StaticResource TextFaint}" HorizontalAlignment="Center" Margin="0,0,0,12"/>
-                                        <TextBlock Text="{Binding EmptyStateText}" TextWrapping="Wrap" TextAlignment="Center"
-                                                   Foreground="{StaticResource TextMuted}" LineHeight="20" FontSize="12"/>
-                                    </StackPanel>
-                                </Border>
-                            </Grid>
-
-                            <!-- 底部连接操作栏 -->
-                            <StackPanel Grid.Row="3" Margin="0,12,0,0">
-                                <Grid>
+                <Grid Grid.Row="4">
+                    <ListBox ItemsSource="{Binding FilteredDevices}" SelectedItem="{Binding SelectedDevice, Mode=TwoWay}"
+                             Background="Transparent" BorderThickness="0" Padding="0" ItemContainerStyle="{StaticResource DeviceRow}"
+                             ScrollViewer.CanContentScroll="True" ScrollViewer.VerticalScrollBarVisibility="Visible"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="0.5,0.5"
+                             AutomationProperties.Name="附近的蓝牙设备">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Height="41" Margin="10,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="111"/>
+                                        <ColumnDefinition Width="76"/>
+                                        <ColumnDefinition Width="67"/>
                                     </Grid.ColumnDefinitions>
-                                    <Button Content="{Binding ConnectButtonText}" Command="{Binding ConnectSelectedDeviceCommand}"
-                                            Style="{StaticResource PrimaryButton}"/>
-                                    <Button Grid.Column="1" Content="取消" Command="{Binding CancelConnectCommand}" Margin="8,0,0,0" Padding="14,9"/>
+                                    <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                               Margin="0,0,10,0" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding AddressText}" FontFamily="Consolas" FontSize="12"
+                                               VerticalAlignment="Center" Foreground="{StaticResource TextMuted}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding CategoryBadgeText}" FontSize="12" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Category}" Value="Broadcasting">
+                                                        <Setter Property="Foreground" Value="{StaticResource Live}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Category}" Value="CandidateName">
+                                                        <Setter Property="Foreground" Value="{StaticResource Warn}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Grid.Column="3" Text="{Binding Rssi, StringFormat={}{0} dBm}" FontFamily="Consolas"
+                                               FontSize="12" Foreground="{StaticResource TextMuted}"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"/>
                                 </Grid>
-                                <TextBlock Text="💡 提示：若设备在广播中带心率（绿色标签），选中后无需 GATT 连接即可直接显示心率。"
-                                           Foreground="{StaticResource TextFaint}" FontSize="11" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                            </StackPanel>
-                        </Grid>
-                    </Border>
-
-                    <!-- 右列：实时看板与悬浮窗工作台 -->
-                    <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel>
-                            <!-- 实时心率主看板 -->
-                            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                                <StackPanel>
-                                    <Grid>
-                                        <StackPanel>
-                                            <TextBlock Text="实时心率" FontSize="16" FontWeight="SemiBold"/>
-                                            <TextBlock Text="{Binding SelectedDevice.Name, FallbackValue='未选定设备'}"
-                                                       Foreground="{StaticResource TextMuted}" FontSize="12" Margin="0,2,0,0"/>
-                                        </StackPanel>
-                                        <Border HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                Background="{StaticResource SurfaceAlt}" CornerRadius="8" Padding="8,3">
-                                            <StackPanel Orientation="Horizontal">
-                                                <Ellipse Width="6" Height="6" Fill="{Binding StatusBrush}" VerticalAlignment="Center"/>
-                                                <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" FontSize="11" FontWeight="SemiBold" Margin="5,0,0,0"/>
-                                            </StackPanel>
-                                        </Border>
-                                    </Grid>
-
-                                    <!-- 巨大心率数字 -->
-                                    <StackPanel Orientation="Horizontal" Margin="0,20,0,8" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding CurrentBpm}" FontFamily="Cascadia Mono" FontSize="68" FontWeight="Bold"
-                                                   VerticalAlignment="Center"/>
-                                        <TextBlock Text="BPM" Foreground="{StaticResource TextMuted}" FontSize="14" FontWeight="SemiBold"
-                                                   VerticalAlignment="Bottom" Margin="12,0,0,16"/>
-                                        <Path Stretch="Uniform" Width="24" Height="24" Fill="{StaticResource Primary}"
-                                              Data="M12,21.35L10.55,20.03C5.4,15.36 2,12.27 2,8.5C2,5.41 4.42,3 7.5,3C9.24,3 10.91,3.81 12,5.08C13.09,3.81 14.76,3 16.5,3C19.58,3 22,5.41 22,8.5C22,12.27 18.6,15.36 13.45,20.03L12,21.35Z"
-                                              VerticalAlignment="Center" Margin="18,0,0,0"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- 悬浮窗快捷控制 -->
-                            <Border Style="{StaticResource Card}" Margin="0,0,0,18">
-                                <StackPanel>
-                                    <TextBlock Text="悬浮窗控制与个性化" FontSize="16" FontWeight="SemiBold"/>
-
-                                    <!-- 快捷行为按钮 -->
-                                    <UniformGrid Columns="3" Margin="0,14,0,0">
-                                        <Button Content="{Binding OverlayLockButtonText}" Command="{Binding ToggleOverlayLockCommand}" Margin="0,0,4,0"/>
-                                        <Button Content="{Binding OverlayBackgroundButtonText}" Command="{Binding ToggleOverlayBackgroundCommand}" Margin="4,0,4,0"/>
-                                        <Button Content="切换穿透" Command="{Binding ToggleOverlayClickThroughCommand}" Margin="4,0,0,0"
-                                                ToolTip="鼠标是否直接穿透悬浮窗点击下方内容"/>
-                                    </UniformGrid>
-
-                                    <Border Height="1" Background="{StaticResource Border}" Margin="0,16,0,14"/>
-
-                                    <!-- 样式与反色 -->
-                                    <TextBlock Text="智能反色" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                                    <ComboBox SelectedValue="{Binding Overlay.InversionMode, Mode=TwoWay}">
-                                        <sys:String>自动</sys:String>
-                                        <sys:String>强制浅字</sys:String>
-                                        <sys:String>强制深字</sys:String>
-                                    </ComboBox>
-                                    <TextBlock Text="透明背景下根据屏幕底层明暗逐字与组件联动选色" Foreground="{StaticResource TextFaint}" FontSize="11" Margin="0,4,0,0"/>
-
-                                    <TextBlock Text="数字字体" FontWeight="SemiBold" Margin="0,14,0,6"/>
-                                    <ComboBox SelectedValue="{Binding Overlay.NumberFont, Mode=TwoWay}">
-                                        <sys:String>等宽</sys:String>
-                                        <sys:String>仪表</sys:String>
-                                        <sys:String>无衬线</sys:String>
-                                    </ComboBox>
-
-                                    <TextBlock Text="字体色彩模式" FontWeight="SemiBold" Margin="0,14,0,6"/>
-                                    <ComboBox SelectedValue="{Binding Overlay.ColorMode, Mode=TwoWay}">
-                                        <sys:String>自动</sys:String>
-                                        <sys:String>逐字渐变</sys:String>
-                                        <sys:String>单色</sys:String>
-                                    </ComboBox>
-
-                                    <Grid Margin="0,14,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="10"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock Text="渐变预设" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                                            <ComboBox SelectedValue="{Binding Overlay.GradientId, Mode=TwoWay}">
-                                                <sys:String>红粉</sys:String>
-                                                <sys:String>冰蓝</sys:String>
-                                                <sys:String>翠绿</sys:String>
-                                                <sys:String>金橙</sys:String>
-                                            </ComboBox>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2">
-                                            <TextBlock Text="单色色彩" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                                            <ComboBox SelectedValue="{Binding Overlay.SolidColor, Mode=TwoWay}">
-                                                <sys:String>纯白</sys:String>
-                                                <sys:String>深黑</sys:String>
-                                                <sys:String>心率红</sys:String>
-                                                <sys:String>荧光绿</sys:String>
-                                                <sys:String>天蓝</sys:String>
-                                                <sys:String>琥珀</sys:String>
-                                                <sys:String>橙</sys:String>
-                                                <sys:String>玫红</sys:String>
-                                            </ComboBox>
-                                        </StackPanel>
-                                    </Grid>
-
-                                    <TextBlock Text="显示元素" FontWeight="SemiBold" Margin="0,16,0,6"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <CheckBox Content="爱心图标" IsChecked="{Binding Overlay.ShowHeart, Mode=TwoWay}" Margin="0,0,16,0"/>
-                                        <CheckBox Content="BPM 单位" IsChecked="{Binding Overlay.ShowUnit, Mode=TwoWay}" Margin="0,0,16,0"/>
-                                        <CheckBox Content="实时状态" IsChecked="{Binding Overlay.ShowLive, Mode=TwoWay}"/>
-                                    </StackPanel>
-
-                                    <TextBlock FontWeight="SemiBold" Margin="0,16,0,6">
-                                        <Run Text="整体缩放"/><Run Text="  "/><Run Text="{Binding Overlay.Scale, StringFormat={}{0:F2}×}" Foreground="{StaticResource TextMuted}"/>
-                                    </TextBlock>
-                                    <Slider Minimum="0.75" Maximum="1.5" Value="{Binding Overlay.Scale, Mode=TwoWay}" TickFrequency="0.05" IsSnapToTickEnabled="True"/>
-
-                                    <TextBlock FontWeight="SemiBold" Margin="0,14,0,6">
-                                        <Run Text="不透明度"/><Run Text="  "/><Run Text="{Binding Overlay.OverlayOpacity, StringFormat={}{0:P0}}" Foreground="{StaticResource TextMuted}"/>
-                                    </TextBlock>
-                                    <Slider Minimum="0.5" Maximum="1" Value="{Binding Overlay.OverlayOpacity, Mode=TwoWay}" TickFrequency="0.05" IsSnapToTickEnabled="True"/>
-                                </StackPanel>
-                            </Border>
-
-                            <!-- 提示边界卡片 -->
-                            <Border Background="{StaticResource Surface}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="14" Padding="14">
-                                <TextBlock Text="支持普通窗口、无边框全屏与窗口化全屏。心率数据优先通过标准广播接收，无损低延迟。"
-                                           TextWrapping="Wrap" Foreground="{StaticResource TextMuted}" FontSize="11" LineHeight="16"/>
-                            </Border>
-                        </StackPanel>
-                    </ScrollViewer>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Text="{Binding EmptyStateText}" Visibility="{Binding HasNoDevices, Converter={StaticResource BooleanVisibility}}"
+                               AutomationProperties.LiveSetting="Polite" MaxWidth="280" Margin="14,0"
+                               Foreground="{StaticResource TextMuted}" TextAlignment="Center" TextWrapping="Wrap"
+                               VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False"/>
                 </Grid>
+
+                <Border Grid.Row="5" BorderBrush="{StaticResource Separator}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="{Binding ConnectButtonText}" Command="{Binding ConnectSelectedDeviceCommand}"
+                                MinWidth="113" ToolTip="支持心率广播的设备只需选中"/>
+                        <Button Content="取消连接" Command="{Binding CancelConnectCommand}" Style="{StaticResource QuietButton}" Margin="4,0,0,0"/>
+                    </StackPanel>
+                </Border>
             </Grid>
+
+            <Border Grid.Column="1" Background="{StaticResource Surface}" BorderBrush="{StaticResource Separator}" BorderThickness="1,0,0,0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="24,22,24,20">
+                        <TextBlock Text="实时心率" Style="{StaticResource SectionHeading}"/>
+                        <TextBlock Text="{Binding SelectedDevice.Name, FallbackValue=未选择设备, TargetNullValue=未选择设备}"
+                                   Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,8">
+                            <TextBlock Text="{Binding CurrentBpm}" FontFamily="Consolas" FontSize="78" FontWeight="Normal"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Text="BPM" Foreground="{StaticResource Accent}" FontFamily="Consolas" FontSize="15"
+                                       VerticalAlignment="Bottom" Margin="12,0,0,16"/>
+                        </StackPanel>
+                        <DockPanel Margin="0,0,0,20" LastChildFill="True">
+                            <Ellipse DockPanel.Dock="Left" Width="6" Height="6" Fill="{Binding StatusBrush}"
+                                     Margin="0,0,7,0" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding Status}" Foreground="{Binding StatusBrush}" TextWrapping="Wrap"
+                                       AutomationProperties.LiveSetting="Polite"/>
+                        </DockPanel>
+
+                        <Border BorderBrush="{StaticResource Separator}" BorderThickness="0,1,0,1" Padding="0,18,0,14">
+                            <StackPanel>
+                                <TextBlock Text="悬浮窗" Style="{StaticResource SectionHeading}"/>
+                                <UniformGrid Columns="3" Margin="0,11,0,0">
+                                    <Button Content="{Binding OverlayLockButtonText}" Command="{Binding ToggleOverlayLockCommand}"
+                                            Style="{StaticResource OverlayAction}" Margin="0,0,4,0"/>
+                                    <Button Content="{Binding OverlayBackgroundButtonText}" Command="{Binding ToggleOverlayBackgroundCommand}"
+                                            Style="{StaticResource OverlayAction}" Margin="2,0"/>
+                                    <Button Content="{Binding OverlayClickThroughButtonText}" Command="{Binding ToggleOverlayClickThroughCommand}"
+                                            Style="{StaticResource OverlayAction}" Margin="4,0,0,0"
+                                            ToolTip="开启后，鼠标点击会穿过悬浮窗"/>
+                                </UniformGrid>
+                            </StackPanel>
+                        </Border>
+
+                        <Expander Header="外观设置" Margin="0,7,0,0">
+                            <Expander.Style>
+                                <Style TargetType="Expander" BasedOn="{StaticResource AppearanceSection}">
+                                    <Style.Triggers>
+                                        <Trigger Property="IsExpanded" Value="True">
+                                            <Setter Property="Content" Value="{Binding}"/>
+                                            <Setter Property="ContentTemplate" Value="{StaticResource AppearanceSettings}"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Expander.Style>
+                        </Expander>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
         </Grid>
-    </Border>
+    </Grid>
 </Window>
